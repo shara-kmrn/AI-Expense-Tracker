@@ -1,0 +1,52 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+/secrets/
+*.pem
+*.key
+*.jks
+*.keystore
+*.p12
+*.pfx
+key.properties
+
+# Python virtual environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+/backend/build/
+/backend/dist/
+
+# Flutter generated files
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+/frontend/build/
+.gradle/
+local.properties
+
+# Local caches and artifacts
+/dist/
+/.dist/
+/.cache/
+*.log
+*.dump
+*.sql.gz
+*.apk
+*.aab
+
+# IDE and operating system files
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
