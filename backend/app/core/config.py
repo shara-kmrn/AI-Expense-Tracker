@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import AfterValidator, Field, SecretStr, field_validator
@@ -42,6 +42,16 @@ class Settings(BaseSettings):
     jwt_audience: str = Field(default="expense-tracker-android", min_length=1)
     access_token_minutes: int = Field(default=15, ge=1, le=60)
     refresh_session_days: int = Field(default=7, ge=1, le=30)
+    smtp_host: str | None = Field(default=None, validation_alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, ge=1, le=65535, validation_alias="SMTP_PORT")
+    smtp_username: str | None = Field(default=None, validation_alias="SMTP_USERNAME")
+    smtp_password: SecretStr | None = Field(default=None, validation_alias="SMTP_PASSWORD")
+    smtp_from_email: str | None = Field(default=None, validation_alias="SMTP_FROM_EMAIL")
+    smtp_security: Literal["starttls", "tls"] = Field(default="starttls", validation_alias="SMTP_SECURITY")
+    smtp_timeout_seconds: float = Field(default=5, gt=0, le=30, validation_alias="SMTP_TIMEOUT_SECONDS")
+    reset_token_minutes: int = Field(
+        default=15, ge=1, le=60, validation_alias="PASSWORD_RESET_TOKEN_EXPIRE_MINUTES"
+    )
     database_url: SecretStr | None = Field(default=None, validation_alias="DATABASE_URL")
     test_database_url: SecretStr | None = Field(
         default=None, validation_alias="TEST_DATABASE_URL"

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.auth.errors import AuthError, InvalidCredentials
 from app.auth.models import RefreshSession, User
 from app.auth.passwords import hash_password, verify_password
-from app.auth.repository import lock_family, token_location, user_by_email
+from app.auth.repository import lock_family, lock_user, token_location, user_by_email
 from app.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 from app.auth.tokens import digest_token, issue_access, new_refresh_token
 from app.core.config import Settings
@@ -48,7 +48,7 @@ def issue_session_tokens(db, settings, user_id, family_id, session_id, deadline,
 
 def login(db: Session, settings: Settings, data: LoginRequest) -> TokenResponse:
     with db.begin():
-        user = user_by_email(db, data.email)
+        user = user_by_email(db, data.email, lock=True)
         valid, replacement = verify_password(
             data.password.get_secret_value(), user.password_hash if user else None
         )
@@ -67,6 +67,9 @@ def refresh(db: Session, settings: Settings, token: str) -> TokenResponse:
         location = token_location(db, digest_token(token))
         if location is None:
             raise InvalidCredentials
+        user = lock_user(db, location.user_id)
+        if user is None or not user.active:
+            raise InvalidCredentials
         family = lock_family(db, location.family_id)
         now = datetime.now(UTC)
         if family is None or family.revoked_at is not None or family.expires_at <= now:
@@ -77,8 +80,7 @@ def refresh(db: Session, settings: Settings, token: str) -> TokenResponse:
         if previous.rotated_at is not None:
             family.revoked_at = now
         else:
-            user = db.get(User, family.user_id)
-            if user is None or not user.active or previous.expires_at <= now:
+            if user.id != family.user_id or previous.expires_at <= now:
                 raise InvalidCredentials
             previous.rotated_at = now
             return issue_session_tokens(
@@ -103,6 +105,8 @@ def current_user(db: Session, user_id, family_id) -> UserResponse:
 
 def logout(db: Session, user_id, family_id) -> None:
     with db.begin():
+        if lock_user(db, user_id) is None:
+            raise InvalidCredentials
         family = lock_family(db, family_id)
         if family is None or family.user_id != user_id:
             raise InvalidCredentials

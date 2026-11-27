@@ -100,11 +100,11 @@ Set-ExpenseTrackerDatabaseUrl TEST_DATABASE_URL expense_tracker_test_app expense
 
 ## Alembic migrations
 
-Run these commands from `backend/`. Revision `0001` is the empty baseline and `0002` adds users and refresh sessions. Online migrations verify the connected database and role before executing. Run the round trip only in the isolated test database. Downgrading to `0001` removes the authentication tables and all their data. After the test suite passes, apply the upgrade to the development database.
+Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, and `0003` adds password reset records. Online migrations verify the database and role. Downgrading to `0002` removes reset records while preserving accounts and sessions. Run the round trip only against the isolated test database. Apply only the forward upgrade to the development database after testing.
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
-.\.venv\Scripts\python.exe -m alembic -x target=test downgrade 0001
+.\.venv\Scripts\python.exe -m alembic -x target=test downgrade 0002
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m alembic upgrade head
@@ -153,7 +153,7 @@ The tests still run, and Uvicorn does not use this test client.
 
 The real PostgreSQL tests skip when `TEST_DATABASE_URL` is unset. They verify the connected test database and role before running a migration round trip inside a transaction that is rolled back. Configure both project databases on the same instance for the isolation checks.
 
-The authentication integration suite requires `TEST_DATABASE_URL` and revision `0002` on the isolated test database. It verifies database and role identity before use, creates uniquely named synthetic accounts, and removes only those accounts when finished.
+The authentication integration suite requires `TEST_DATABASE_URL` and revision `0003` on the isolated test database. It verifies database and role identity, creates uniquely named synthetic accounts, and removes those accounts when finished. SMTP is mocked in tests.
 
 ## Authentication
 
@@ -197,6 +197,41 @@ Passwords must be 15–128 characters. Spaces and Unicode are accepted. Argon2id
 
 Refresh keeps the original absolute session deadline. Each successful request consumes the old token, and reuse revokes the whole family. Serialize refresh requests in the Android client and replace stored tokens together. If concurrent refreshes or a retry consume the same token, the client may need to log in again. Logout revokes one family immediately and is idempotent while the same signed access token remains unexpired.
 
-Use TLS, platform-backed secure token storage, a managed signing secret, and distributed rate limits at deployment. The local per-source limit and four concurrent password operations apply per process. Configure trusted proxies and ingress request-size limits. Exclude credentials, authorization headers, and request bodies from logs. Plan a retention policy for expired session records. Password reset, account deletion, and profile editing remain outside this phase.
+Use TLS, platform-backed secure token storage, a managed signing secret, and distributed rate limits at deployment. The local per-source limit and four concurrent password operations apply per process. Configure trusted proxies and ingress request-size limits. Exclude credentials, authorization headers, and request bodies from logs. Plan a retention policy for expired session records.
+
+## Profile and account security
+
+| Route | Request | Success |
+| --- | --- | --- |
+| `PATCH /api/v1/users/me` | Bearer access token and JSON `full_name` | 200, updated profile with a UTC timestamp |
+| `POST /api/v1/auth/change-password` | Bearer access token and JSON `current_password`, `new_password` | 204 |
+| `POST /api/v1/auth/forgot-password` | JSON `email` | 202, generic recovery message |
+| `POST /api/v1/auth/reset-password` | JSON `reset_token`, `new_password` | 204 |
+| `DELETE /api/v1/users/me` | Bearer access token and JSON body with `current_password` | 204 |
+
+Profile updates trim the full name using registration rules. Email stays immutable. Unsupported fields return 422. Invalid authentication returns 401 with a Bearer challenge. Incorrect current passwords, reuse of the current password during change, and invalid reset tokens return 400. Exhausting the source rate limit returns 429. Validation and database errors are sanitized, and sensitive responses include `Cache-Control: no-store`.
+
+Changing or resetting a password requires the user to log in again. The password write, session revocation, and reset-token invalidation share one transaction. Account operations acquire the user row before session-family or reset-token writes. Login and refresh also acquire the user row before issuing tokens, so they cannot leave a usable session based on the old password. Account deletion permanently removes the user, refresh sessions, and reset records while preserving other accounts. Future financial modules must define and integrate their deletion or retention policies before production.
+
+### Recovery and SMTP
+
+Recovery codes are 43-character URL-safe strings generated from 256 bits of randomness. PostgreSQL stores only SHA-256 digests. Codes expire after 15 minutes by default and are single-use. A newer request invalidates older codes. Recovery issuance removes that account's tokens that expired more than seven days earlier. Accounts that never request recovery again retain expired records until a maintenance purge or account deletion.
+
+The API returns the same 202 response for valid email input regardless of account state or delivery outcome. Delivery runs after the response in a bounded background worker and starts after the database transaction has closed. There is no durable delivery queue or automatic retry. Delivery failures emit a generic log message. A newer code can supersede an older one even if emails arrive out of order. The Android client should accept a pasted code, clear stored tokens after a password change or reset, and prompt for login. Recovery uses email codes without a web app or deep-link domain.
+
+Configure the following in the ignored backend `.env`. Recovery delivery is optional for local development and is independent of ordinary authentication and health checks.
+
+| Variable | Example or default |
+| --- | --- |
+| `SMTP_HOST` | `smtp.gmail.com` for Gmail |
+| `SMTP_PORT` | `587` for STARTTLS or `465` for implicit TLS |
+| `SMTP_SECURITY` | `starttls` (default) or `tls` |
+| `SMTP_USERNAME` | Provider login address |
+| `SMTP_PASSWORD` | Provider-issued SMTP credential |
+| `SMTP_FROM_EMAIL` | Provider-authorized sender address |
+| `SMTP_TIMEOUT_SECONDS` | `5` seconds by default per socket operation |
+| `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` | `15` minutes by default |
+
+For Gmail, use an eligible account with 2-Step Verification and an [app password](https://support.google.com/mail/answer/185833). Store the app password directly in the ignored local file or secret store. Both SMTP modes verify certificates. STARTTLS failure ends the connection before authentication. Recovery also has a process-local per-email limit of three requests per 15 minutes and at most four active jobs per worker. Use shared limits and a durable delivery design before relying on recovery in production.
 
 If readiness returns 503 while liveness returns 200, verify `DATABASE_URL`, the listener with `pg_isready`, and the role with an interactive `psql` login. For a migration identity error, check the selected target and the database and role names. Keep connection URLs and raw authentication errors out of shared logs.
