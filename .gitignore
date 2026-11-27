@@ -32,6 +32,7 @@ htmlcov/
 .flutter-plugins
 .flutter-plugins-dependencies
 /frontend/build/
+/frontend/android/build/
 .gradle/
 local.properties
 
