@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     app_name: str = "AI-Powered Personal Expense Tracker API"
     app_version: str = "0.1.0"
     cors_origins: tuple[Annotated[str, AfterValidator(validate_origin)], ...] = ()
+    jwt_secret: SecretStr | None = None
+    jwt_issuer: str = Field(default="expense-tracker-api", min_length=1)
+    jwt_audience: str = Field(default="expense-tracker-android", min_length=1)
+    access_token_minutes: int = Field(default=15, ge=1, le=60)
+    refresh_session_days: int = Field(default=7, ge=1, le=30)
     database_url: SecretStr | None = Field(default=None, validation_alias="DATABASE_URL")
     test_database_url: SecretStr | None = Field(
         default=None, validation_alias="TEST_DATABASE_URL"

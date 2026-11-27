@@ -100,12 +100,13 @@ Set-ExpenseTrackerDatabaseUrl TEST_DATABASE_URL expense_tracker_test_app expense
 
 ## Alembic migrations
 
-Run these commands from `backend/`. The empty baseline records the first revision in Alembic's version table and creates no business tables. Online migrations verify the connected database and role before executing. Test the full round trip in the isolated test database. After confirming the development database belongs to this project, apply the non-destructive baseline there.
+Run these commands from `backend/`. Revision `0001` is the empty baseline and `0002` adds users and refresh sessions. Online migrations verify the connected database and role before executing. Run the round trip only in the isolated test database. Downgrading to `0001` removes the authentication tables and all their data. After the test suite passes, apply the upgrade to the development database.
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
-.\.venv\Scripts\python.exe -m alembic -x target=test downgrade base
+.\.venv\Scripts\python.exe -m alembic -x target=test downgrade 0001
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
+.\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m alembic upgrade head
 ```
 
@@ -151,5 +152,51 @@ Starlette 1.10.0 prefers `httpx2` for `TestClient`. If it is absent, importing
 The tests still run, and Uvicorn does not use this test client.
 
 The real PostgreSQL tests skip when `TEST_DATABASE_URL` is unset. They verify the connected test database and role before running a migration round trip inside a transaction that is rolled back. Configure both project databases on the same instance for the isolation checks.
+
+The authentication integration suite requires `TEST_DATABASE_URL` and revision `0002` on the isolated test database. It verifies database and role identity before use, creates uniquely named synthetic accounts, and removes only those accounts when finished.
+
+## Authentication
+
+The versioned API handles requests and response validation. The authentication service owns registration and session transactions, and repositories handle user lookup and family locks. User responses expose only the authenticated account's ID, name, email, and timestamps. Registering creates no session.
+
+| Variable | Purpose |
+| --- | --- |
+| `EXPENSE_TRACKER_JWT_SECRET` | Required for authentication. Use a cryptographically generated development key in the ignored `.env` and a separate managed key in production. |
+| `EXPENSE_TRACKER_JWT_ISSUER` | Token issuer, defaults to `expense-tracker-api`. |
+| `EXPENSE_TRACKER_JWT_AUDIENCE` | Token audience, defaults to `expense-tracker-android`. |
+| `EXPENSE_TRACKER_ACCESS_TOKEN_MINUTES` | Access token lifetime, defaults to 15 minutes. |
+| `EXPENSE_TRACKER_REFRESH_SESSION_DAYS` | Absolute session lifetime from login, defaults to 7 days. |
+
+Generate a signing key once from `backend/`. These commands preserve an existing key and do not echo the generated value.
+
+```powershell
+@'
+from pathlib import Path
+from secrets import token_urlsafe
+from dotenv import dotenv_values, set_key
+
+path = Path(".env")
+path.touch(exist_ok=True)
+key = "EXPENSE_TRACKER_JWT_SECRET"
+if not dotenv_values(path).get(key):
+    set_key(path, key, token_urlsafe(48))
+'@ | .\.venv\Scripts\python.exe -
+```
+
+| Route | Request | Success |
+| --- | --- | --- |
+| `POST /api/v1/auth/register` | JSON with `full_name`, `email`, `password` | 201, sanitized profile |
+| `POST /api/v1/auth/login` | JSON with `email`, `password` | 200, token response |
+| `GET /api/v1/users/me` | Bearer access token | 200, authenticated profile |
+| `POST /api/v1/auth/refresh` | JSON with `refresh_token` | 200, replacement token response |
+| `POST /api/v1/auth/logout` | Bearer access token | 204, empty body |
+
+Register, then log in and send the returned access token as a Bearer credential. Token responses contain `access_token`, `refresh_token`, `token_type`, `expires_in` in seconds, and `refresh_expires_at`. Authentication responses use `Cache-Control: no-store`. Invalid credentials return a generic 401. Duplicate registration returns 409 and can reveal account existence. Registration validates email format and normalizes case, with mailbox ownership verification deferred.
+
+Passwords must be 15–128 characters. Spaces and Unicode are accepted. Argon2id protects stored passwords and hashes are upgraded after successful checks when the hashing policy changes. Login uses a dummy hash for missing users. Access JWTs use HS256 and bind to the user and active session family. Refresh tokens are random opaque values stored as SHA-256 digests.
+
+Refresh keeps the original absolute session deadline. Each successful request consumes the old token, and reuse revokes the whole family. Serialize refresh requests in the Android client and replace stored tokens together. If concurrent refreshes or a retry consume the same token, the client may need to log in again. Logout revokes one family immediately and is idempotent while the same signed access token remains unexpired.
+
+Use TLS, platform-backed secure token storage, a managed signing secret, and distributed rate limits at deployment. The local per-source limit and four concurrent password operations apply per process. Configure trusted proxies and ingress request-size limits. Exclude credentials, authorization headers, and request bodies from logs. Plan a retention policy for expired session records. Password reset, account deletion, and profile editing remain outside this phase.
 
 If readiness returns 503 while liveness returns 200, verify `DATABASE_URL`, the listener with `pg_isready`, and the role with an interactive `psql` login. For a migration identity error, check the selected target and the database and role names. Keep connection URLs and raw authentication errors out of shared logs.

@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import Settings
+from app.auth import models  # noqa: F401 - register ORM metadata
 from app.db.base import Base
 from app.db.session import build_engine
 
