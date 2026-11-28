@@ -10,6 +10,7 @@ from app.db.base import Base
 from app.db.session import DatabaseNotConfigured, build_engine
 from app.expenses import models as expense_models  # noqa: F401 - register ORM metadata
 from app.incomes import models as income_models  # noqa: F401 - register ORM metadata
+from app.transfers import models as transfer_models  # noqa: F401 - register ORM metadata
 from app.wallets import models as wallet_models  # noqa: F401 - register ORM metadata
 
 

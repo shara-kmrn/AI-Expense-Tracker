@@ -47,7 +47,7 @@ with engine.connect() as conn:
     assert tuple(conn.execute(text("SELECT current_database(), current_user")).one()) == (
         "expense_tracker_test", "expense_tracker_test_app"
     )
-    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0007"
+    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0008"
 email = f"phase43-manual-{uuid4().hex}@example.com"
 application = create_app(settings)
 application.state.recovery_delivery = lambda *_: None
@@ -114,6 +114,14 @@ Open **Expenses** from Home. The page shares the income history and form compone
 Add and edit use active expense categories and wallets, preserving unchanged historical references. The form shows the loaded wallet balance and estimated remaining balance using BigInt minor units. An edit on the same wallet includes the original expense when estimating the available amount. The server checks the current balance at submission. A confirmed deletion credits the wallet once.
 
 Expense creation has its own in-memory pending operation and uses the original UUIDv4 key and payload for an explicit retry. After a restart, reconcile authoritative history before resubmitting. Version conflicts and uncertain edits or deletions require a reload. Wallet Management fetches authoritative balances on entry. Automated tests exercise exact amounts, period selection, and the guarded transaction flow. Live Chrome-to-API, manual Chrome, and physical Android checks remain deferred to Phase 08.
+
+## Wallet transfers
+
+Open **Wallet transfers** from Home for history, search, wallet and date filters, and original or reversal filtering. **Transfer** in My Wallets opens the new-transfer form. Its selectors load every active wallet page and show wallet type and available balance. The review step shows direction, amount, date, optional note, and both estimated balances. All amounts use decimal strings and BigInt minor units. The server checks current balances when confirming.
+
+Details show the original transfer or compensation, archived-wallet indicators, and links between the two records. Reverse Transfer reloads the record and both wallet balances before review and requires confirmation. Wallet Management refreshes authoritative balances when returning from its transfer action. Income and expense totals are unaffected.
+
+An uncertain transfer or reversal retains its payload and UUIDv4 key in session memory. Check authoritative history or the original's reversal link, or explicitly retry with the same key. Logout clears pending operations. After a process restart, check history before resubmitting. Automated tests cover exact parsing, stale history, confirmation and cancellation, same-key retries, and refreshed wallet balances. Live Chrome-to-API, manual Chrome, and physical Android verification remain deferred to Phase 08.
 
 ## Verification
 

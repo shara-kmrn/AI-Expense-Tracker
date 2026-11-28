@@ -66,8 +66,8 @@ def test_postgres_migration_roundtrip(connection):
     def revisions():
         return MigrationContext.configure(connection).get_current_heads()
 
-    assert revisions() in {(), ("0001",), ("0002",), ("0003",), ("0004",), ("0005",), ("0006",), ("0007",)}, "Unexpected migration history on test database"
-    if revisions() in {("0002",), ("0003",), ("0004",), ("0005",), ("0006",), ("0007",)}:
+    assert revisions() in {(), ("0001",), ("0002",), ("0003",), ("0004",), ("0005",), ("0006",), ("0007",), ("0008",)}, "Unexpected migration history on test database"
+    if revisions() in {("0002",), ("0003",), ("0004",), ("0005",), ("0006",), ("0007",), ("0008",)}:
         command.downgrade(config, "0001")
     command.upgrade(config, "0001")
     assert revisions() == ("0001",)

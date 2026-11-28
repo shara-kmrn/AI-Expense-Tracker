@@ -13,6 +13,9 @@ import '../features/incomes/data/income_repository.dart';
 import '../features/incomes/data/income_choices.dart';
 import '../features/incomes/presentation/income_form.dart';
 import '../features/incomes/presentation/income_pages.dart';
+import '../features/transfers/data/transfer_repository.dart';
+import '../features/transfers/presentation/transfer_form.dart';
+import '../features/transfers/presentation/transfer_pages.dart';
 import '../features/wallets/data/wallet_repository.dart';
 import '../features/wallets/presentation/wallet_form.dart';
 import '../features/wallets/presentation/wallet_pages.dart';
@@ -35,6 +38,7 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
   late final GoRouter _router;
   late final IncomeRepository _incomes;
   late final IncomeRepository _expenses;
+  late final TransferRepository _transfers;
   String? _incomeOwner;
 
   void _clearIncomeOnAccountChange() {
@@ -42,6 +46,7 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
     if (owner != _incomeOwner) {
       _incomes.pending = null;
       _expenses.pending = null;
+      _transfers.clearPending();
     }
     _incomeOwner = owner;
   }
@@ -52,6 +57,10 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
     final auth = widget.auth;
     final categories = CategoryRepository(auth.repository.client);
     final wallets = WalletRepository(auth.repository.client);
+    final transfers = _transfers = TransferRepository(
+      auth.repository.client,
+      wallets,
+    );
     final incomes = _incomes = IncomeRepository(auth.repository.client);
     final expenses = _expenses = IncomeRepository(
       auth.repository.client,
@@ -161,6 +170,47 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
             ),
             financialRoute('income', incomes, incomeChoices),
             financialRoute('expenses', expenses, expenseChoices),
+            GoRoute(
+              path: 'transfers',
+              builder: (_, _) => TransferHistoryPage(
+                auth,
+                transfers,
+                key: ValueKey(auth.user?.id),
+              ),
+              routes: [
+                GoRoute(
+                  path: 'add',
+                  builder: (_, _) => TransferEditor(
+                    auth,
+                    transfers,
+                    key: ValueKey(auth.user?.id),
+                  ),
+                ),
+                GoRoute(
+                  path: ':id',
+                  builder: (_, state) => TransferDetailsPage(
+                    auth,
+                    transfers,
+                    state.pathParameters['id']!,
+                    key: ValueKey((auth.user?.id, state.pathParameters['id'])),
+                  ),
+                  routes: [
+                    GoRoute(
+                      path: 'reverse',
+                      builder: (_, state) => TransferEditor(
+                        auth,
+                        transfers,
+                        originalId: state.pathParameters['id']!,
+                        key: ValueKey((
+                          auth.user?.id,
+                          state.pathParameters['id'],
+                        )),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
             GoRoute(
               path: 'wallets',
               builder: (_, _) =>

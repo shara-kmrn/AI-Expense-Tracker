@@ -100,7 +100,7 @@ Set-ExpenseTrackerDatabaseUrl TEST_DATABASE_URL expense_tracker_test_app expense
 
 ## Alembic migrations
 
-Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, `0003` adds password reset records, `0004` adds and backfills categories, `0005` adds wallets, `0006` adds income, and `0007` adds expenses. Online migrations verify the database and role. Financial migration tests exercise downgrades in isolated transactions. Apply only the forward upgrade to the development database after testing.
+Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, `0003` adds password reset records, `0004` adds and backfills categories, `0005` adds wallets, `0006` adds income, `0007` adds expenses, and `0008` adds wallet transfers. Online migrations verify the database and role. Financial migration tests exercise downgrades in isolated transactions. Apply only the forward upgrade to the development database after testing.
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
@@ -108,7 +108,7 @@ Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002
 .\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m alembic -x target=test current
 .\.venv\Scripts\python.exe -m alembic current
-.\.venv\Scripts\python.exe -m alembic upgrade 0007
+.\.venv\Scripts\python.exe -m alembic upgrade 0008
 .\.venv\Scripts\python.exe -m alembic current
 ```
 
@@ -155,9 +155,40 @@ The tests still run, and Uvicorn does not use this test client.
 
 The real PostgreSQL tests skip when `TEST_DATABASE_URL` is unset. They verify the connected test database and role before running a migration round trip inside a transaction that is rolled back. Configure both project databases on the same instance for the isolation checks.
 
-The authentication, category, wallet, income, and expense integration suites require `TEST_DATABASE_URL` and revision `0007` on the isolated test database. They verify database and role identity, create uniquely named synthetic accounts, and remove those accounts when finished. SMTP is mocked in tests.
+The integration suites require `TEST_DATABASE_URL` and revision `0008` on the isolated test database. They verify database and role identity, create uniquely named synthetic accounts, and remove those accounts when finished. SMTP is mocked in tests.
 
 Connection failures report a sanitized PostgreSQL diagnostic. The application engine suppresses informational SQL and pool logging and hides bound parameters. The pytest configuration keeps tracebacks while suppressing frame locals, which can contain driver configuration. For a connection failure, verify the isolated database identity, listener, and role with an interactive `psql` session.
+
+## Wallet transfers
+
+Transfers record internal movements between different active wallets owned by the same user. No external payment or bank integration is involved. Amounts are positive exact LKR decimal strings with up to two fractional digits and a maximum of `9999999999999999.99`. Completed dates use the Colombo calendar date policy. Historical dates label the record, and the current wallet balances control eligibility.
+
+`wallet_transfers` stores the owner, source and destination wallet IDs, amount, currency, calendar date, optional note, linked original ID, and UTC creation timestamp. Composite foreign keys enforce same-owner wallet and reversal references. A unique owner-and-original constraint permits one reversal. Transfer records are immutable. A compensating record preserves the original movement for audit and history, and its wallet direction and amount come from the original. It is dated on the current Colombo business date. An original's reversed status is derived from the linked movement. A reversal cannot itself be reversed.
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /api/v1/transfers` | Owner-scoped history, ordered by transfer date, creation time, and ID descending. Supports `date_from`, `date_to`, `wallet_id` in either direction, `source_wallet_id`, `destination_wallet_id`, `kind=original\|reversal`, literal `q` across wallet names and note, `limit` 1–100, and `offset`. Returns `items` and nullable `next_offset`. |
+| `GET /api/v1/transfers/{id}` | Returns wallet display fields, archive indicators, dates, exact amount, note, `status`, `reversal_of_id`, and `reversal_id`. Missing and foreign records return `404`. |
+| `POST /api/v1/transfers` | Requires a UUIDv4 `Idempotency-Key` and returns `201` for creation or identical replay. |
+| `POST /api/v1/transfers/{id}/reverse` | Requires a UUIDv4 `Idempotency-Key`. Accepts an optional note. Returns `201` for a new compensating record or identical replay. |
+
+Example creation body.
+
+```json
+{"source_wallet_id":"10000000-0000-4000-8000-000000000001","destination_wallet_id":"10000000-0000-4000-8000-000000000002","amount":"100.50","currency":"LKR","transfer_date":"2026-11-28","note":"Cash withdrawal"}
+```
+
+Each item includes a response of this shape.
+
+```json
+{"id":"10000000-0000-4000-8000-000000000003","source_wallet":{"id":"10000000-0000-4000-8000-000000000001","name":"Bank","type":"BANK","icon":"wallet","color":"#D4AF37","is_active":true},"destination_wallet":{"id":"10000000-0000-4000-8000-000000000002","name":"Cash","type":"CASH","icon":"wallet","color":"#D4AF37","is_active":true},"amount":"100.50","currency":"LKR","transfer_date":"2026-11-28","created_at":"2026-11-28T12:00:00Z","note":"Cash withdrawal","status":"original","reversal_of_id":null,"reversal_id":null}
+```
+
+Invalid input returns `422`. Insufficient funds, overflow, archived-wallet conflicts, a second reversal with a new key, an attempt to reverse a reversal, and different payloads using the same key return `409`. Restore archived wallets explicitly before reversing. The shared financial service reserves the owner and operation-scoped replay key, locks the original row for reversal, then locks the wallets in UUID order. It validates both final balances before assigning either, saves the movement and replay snapshot, and commits once. The debit and credit are equal, preserving combined balances. Successful keys remain until account deletion. Transfer creation and reversal each have separate namespaces from income and expense creation. Replays retain the original successful response, while GET returns current derived status.
+
+Reconcile read-only with `app.financial.reconciliation.wallet_discrepancies`. The calculation is opening balance plus active income minus active expenses plus incoming transfers minus outgoing transfers. Original and reversal records both participate once. Independent aggregates avoid join multiplication. Transfers leave income and expense records and summaries unchanged. Future savings, fees, or other movements would need their own audited rules and reconciliation terms.
+
+Migration `0008` adds transfer and replay storage without changing existing balances. Downgrade to `0007` refuses if either new table contains data. Upgrade the isolated database first and run the full suite with `python -m pytest -q -p no:cacheprovider --tb=line`. The migration tests cover safe downgrade, re-upgrade, and the populated guard. Apply only the forward migration to development after isolated verification. The previously exposed local test credential remains a separate unresolved issue.
 
 ## Expense management
 
@@ -181,7 +212,7 @@ Use positive exact LKR decimal strings with up to two fractional digits and a ma
 {"currency":"LKR","period":"day","start_date":"2026-11-28","end_date":"2026-11-28","total":"50.20","count":1,"categories":[{"category_id":"10000000-0000-4000-8000-000000000002","name":"Food","total":"50.20"}]}
 ```
 
-Income and expense writers lock the owner, replay key or record, wallets in UUID order, and category where needed. Wallet and category archival lock their respective rows. Account deletion locks the owner before cascading. Future transfers must use the same owner and wallet ordering. Reconcile in a read-only transaction using `app.financial.reconciliation.wallet_discrepancies`, which compares current balance against opening balance plus active income minus active expenses.
+Income and expense writers lock the owner, replay key or record, wallets in UUID order, and category where needed. Wallet transfers use the same owner and wallet ordering. Wallet and category archival lock their respective rows. Account deletion locks the owner before cascading. The consolidated reconciliation uses current income, expense, and transfer records.
 
 Revision `0007` creates expense and replay tables while preserving existing balances and income. Downgrade to `0006` takes exclusive locks and refuses if either expense table contains data. Run the isolated test migration and complete pytest suite before applying the forward migration to development. The previously exposed local test credential remains a separate unresolved issue. The credential redaction safeguards remain active.
 

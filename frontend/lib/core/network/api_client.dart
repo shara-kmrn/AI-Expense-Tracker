@@ -38,7 +38,11 @@ enum Endpoint {
   expense('GET', 'expenses/{id}', 200),
   createExpense('POST', 'expenses', 201),
   updateExpense('PATCH', 'expenses/{id}', 200),
-  deleteExpense('DELETE', 'expenses/{id}', 204);
+  deleteExpense('DELETE', 'expenses/{id}', 204),
+  transfers('GET', 'transfers', 200),
+  transfer('GET', 'transfers/{id}', 200),
+  createTransfer('POST', 'transfers', 201),
+  reverseTransfer('POST', 'transfers/{id}/reverse', 201);
 
   const Endpoint(this.method, this.path, this.status);
   final String method;
@@ -91,6 +95,7 @@ class ApiClient {
     String? categoryId,
     String? walletId,
     String? incomeId,
+    String? transferId,
     String? idempotencyKey,
     int? expectedVersion,
     Map<String, String>? query,
@@ -99,14 +104,19 @@ class ApiClient {
     final isWallet = endpoint.path.startsWith('wallets/');
     final isIncome = endpoint.path.startsWith('incomes/');
     final isExpense = endpoint.path.startsWith('expenses/');
-    final id = isIncome || isExpense
+    final isTransfer = endpoint.path.startsWith('transfers/');
+    final id = isTransfer
+        ? transferId
+        : isIncome || isExpense
         ? incomeId
         : isWallet
         ? walletId
         : categoryId;
     if (needsId && (id == null || !_uuid.hasMatch(id))) {
       throw ApiFailure(
-        isExpense
+        isTransfer
+            ? 'Transfer not found.'
+            : isExpense
             ? 'Expense not found.'
             : isIncome
             ? 'Income not found.'
@@ -128,7 +138,9 @@ class ApiClient {
     request.headers['Accept'] = 'application/json';
     if (bearer != null) request.headers['Authorization'] = 'Bearer $bearer';
     if ((endpoint == Endpoint.createIncome ||
-            endpoint == Endpoint.createExpense) &&
+            endpoint == Endpoint.createExpense ||
+            endpoint == Endpoint.createTransfer ||
+            endpoint == Endpoint.reverseTransfer) &&
         idempotencyKey != null) {
       request.headers['Idempotency-Key'] = idempotencyKey;
     }
@@ -230,6 +242,24 @@ class ApiClient {
         expense: true,
       ),
       409 when endpoint.path.startsWith('incomes') => _incomeConflict(response),
+      404 when endpoint.path.startsWith('transfers') =>
+        'The transfer or wallet could not be found.',
+      409 when endpoint.path.startsWith('transfers') => _knownConflict(
+        response,
+        const {
+          'Insufficient wallet balance':
+              'The sending wallet has insufficient funds.',
+          'Wallet balance would exceed its maximum':
+              'The receiving wallet would exceed its balance limit.',
+          'Select an active wallet': 'Both wallets must be active. Restore archived wallets before continuing.',
+          'Transfer already reversed':
+              'This transfer has already been reversed.',
+          'A reversal cannot be reversed':
+              'Compensating transfers cannot be reversed.',
+          'This operation key already belongs to a different request': 'This operation conflicts with a previous submission. Check transfer history.',
+        },
+        'Transfer conflicts with current wallet data.',
+      ),
       429 => 'Too many requests. Wait a moment and try again.',
       _ => 'The service could not complete your request.',
     };
@@ -256,6 +286,18 @@ class ApiClient {
       'This operation key already belongs to a different request':
           'This operation key belongs to a different request. Check your ${expense ? 'expense' : 'income'} history.',
     };
+    return _knownConflict(
+      response,
+      known,
+      '${expense ? 'Expense' : 'Income'} conflicts with current data. Reload and check your selection.',
+    );
+  }
+
+  String _knownConflict(
+    http.Response response,
+    Map<String, String> known,
+    String fallback,
+  ) {
     try {
       final data = jsonDecode(utf8.decode(response.bodyBytes));
       if (data is Map<String, dynamic>) {
@@ -265,6 +307,6 @@ class ApiClient {
     } on FormatException {
       // Only known, sanitized messages are displayed.
     }
-    return '${expense ? 'Expense' : 'Income'} conflicts with current data. Reload and check your selection.';
+    return fallback;
   }
 }
