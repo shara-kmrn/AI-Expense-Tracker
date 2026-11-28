@@ -40,7 +40,7 @@ def context():
         with engine.connect() as conn:
             identity = conn.execute(text("SELECT current_database(), current_user")).one()
             assert tuple(identity) == ("expense_tracker_test", "expense_tracker_test_app")
-            assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004"
+            assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
             verified = True
         app = create_app(settings)
         with TestClient(app) as client:

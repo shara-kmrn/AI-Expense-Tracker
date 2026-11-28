@@ -41,6 +41,11 @@ class HomePage extends StatelessWidget {
           ),
           const SizedBox(height: AppSpacing.md),
           AppPrimaryButton(
+            'Wallets',
+            onPressed: () => context.push('/home/wallets'),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          AppPrimaryButton(
             'Categories',
             onPressed: () => context.push('/home/categories'),
           ),

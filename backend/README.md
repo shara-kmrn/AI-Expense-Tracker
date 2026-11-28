@@ -100,17 +100,17 @@ Set-ExpenseTrackerDatabaseUrl TEST_DATABASE_URL expense_tracker_test_app expense
 
 ## Alembic migrations
 
-Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, `0003` adds password reset records, and `0004` adds and backfills categories. Online migrations verify the database and role. Downgrading to `0003` drops all category data while preserving accounts and authentication records. Run the round trip only against the isolated test database. Apply only the forward upgrade to the development database after testing.
+Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, `0003` adds password reset records, `0004` adds and backfills categories, and `0005` adds wallets. Online migrations verify the database and role. Downgrading from `0005` to `0004` drops all wallet data while preserving accounts, sessions, recovery records, and categories. Run the round trip only against the isolated test database. Apply only the forward upgrade to the development database after testing.
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
-.\.venv\Scripts\python.exe -m alembic -x target=test downgrade 0003
+.\.venv\Scripts\python.exe -m alembic -x target=test downgrade 0004
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m alembic -x target=test current
 .\.venv\Scripts\python.exe -m alembic current
-.\.venv\Scripts\python.exe -m alembic upgrade 0004
+.\.venv\Scripts\python.exe -m alembic upgrade 0005
 .\.venv\Scripts\python.exe -m alembic current
 ```
 
@@ -157,7 +157,41 @@ The tests still run, and Uvicorn does not use this test client.
 
 The real PostgreSQL tests skip when `TEST_DATABASE_URL` is unset. They verify the connected test database and role before running a migration round trip inside a transaction that is rolled back. Configure both project databases on the same instance for the isolation checks.
 
-The authentication and category integration suites require `TEST_DATABASE_URL` and revision `0004` on the isolated test database. They verify database and role identity, create uniquely named synthetic accounts, and remove those accounts when finished. SMTP is mocked in tests.
+The authentication, category, and wallet integration suites require `TEST_DATABASE_URL` and revision `0005` on the isolated test database. They verify database and role identity, create uniquely named synthetic accounts, and remove those accounts when finished. SMTP is mocked in tests.
+
+## Wallet management
+
+Wallets are user-created cash, bank, or digital accounts. The wallet router reuses the authenticated session dependency. The repository scopes all reads, summaries, and locked writes to the signed-in owner. All wallet responses use `Cache-Control: no-store`. Missing and foreign IDs return the same `404`.
+
+The `wallets` table stores a stable UUID, required owner UUID, display and normalized names, type, currency, opening and current balances, icon, color, active status, and UTC timestamps. Owner deletion cascades to wallets. PostgreSQL enforces normalized-name uniqueness across wallet types, valid types and currency, allowlisted icons, uppercase HEX colors, nonnegative balances, and zero current balance for archived wallets. The owner, active status, and type index supports filtered listing. Names follow the category Unicode normalization rules and remain reserved while archived. The icon allowlist matches categories.
+
+LKR and no overdrafts are provisional rules. Both balances use `NUMERIC(18,2)` and Python `Decimal`. Opening balances accept unsigned strings with 1–16 ASCII digits before the decimal point and up to two fractional digits. A decimal point requires at least one following digit. The per-wallet range is `0.00` to `9999999999999999.99`. Exponents, signs, separators, whitespace, excess precision, nonfinite values, and JSON numbers fail validation. Serialized amounts always have two fractional digits. PostgreSQL aggregates exact decimals and the summary can exceed the per-wallet limit.
+
+Creation initializes current balance from opening balance. Metadata edits accept name, icon, and color. Type, currency, balances, ownership, and archive state are server-controlled after creation. Restore an archived wallet before editing. Archival locks the wallet row and requires an exact zero balance. Repeating archive or restore succeeds and preserves the UUID and amounts. Funded wallets remain active until future transaction or transfer features can reduce their balance to zero.
+
+| Method and path | Operation | Responses |
+| --- | --- | --- |
+| `GET /api/v1/wallets` | List owned wallets | `200` |
+| `GET /api/v1/wallets/summary` | Get active total, counts, and balances by type | `200` |
+| `GET /api/v1/wallets/{id}` | Read an owned wallet | `200`, `404` |
+| `POST /api/v1/wallets` | Create a wallet | `201`, `409` |
+| `PATCH /api/v1/wallets/{id}` | Edit active wallet metadata | `200`, `404`, `409` |
+| `DELETE /api/v1/wallets/{id}` | Archive a zero-balance wallet | `204`, `404`, `409` |
+| `POST /api/v1/wallets/{id}/restore` | Restore a wallet | `200`, `404` |
+
+All routes require a bearer session and return `401` for invalid credentials or `422` for invalid inputs. Listing supports `type`, a literal normalized substring `q`, `active` (default true), `limit` (1–100, default 50), and `offset` (0–1,000,000, default zero). Wallets sort by normalized name and UUID. The list returns `items` and nullable `next_offset`. The summary is independent of list filters and pagination.
+
+Example create request and summary after creating that wallet in an empty account.
+
+```json
+{"name":"Personal Cash","type":"CASH","currency":"LKR","opening_balance":"5000.00","icon":"wallet","color":"#D4AF37"}
+```
+
+```json
+{"currency":"LKR","total_active_balance":"5000.00","active_count":1,"archived_count":0,"balances_by_type":{"CASH":"5000.00","BANK":"0.00","DIGITAL":"0.00"}}
+```
+
+Future financial writes must validate active status and ownership, lock participating wallets in a consistent order, record operations and update balances in the same transaction, and use idempotency keys where requests can be retried. Reconciliation should compare balances to independently summed opening amounts and recorded financial activity. Establish a financial retention and deletion policy before enabling production account deletion with financial history.
 
 ## Category Management
 
