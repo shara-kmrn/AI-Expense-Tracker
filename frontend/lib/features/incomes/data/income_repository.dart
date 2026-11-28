@@ -26,24 +26,26 @@ String incomeOperationKey() {
 }
 
 class IncomeRecord {
-  IncomeRecord.fromJson(Map<String, dynamic> json)
-    : id = json['id'] as String,
-      title = json['title'] as String,
-      rawAmount = json['amount'] as String,
-      amount = parseWalletMoney(json['amount'] as String),
-      date = DateTime.parse(json['income_date'] as String),
-      note = json['note'] as String?,
-      version = json['version'] as int,
-      categoryId = json['category_id'] as String,
-      categoryName = json['category_name'] as String,
-      categoryIcon = json['category_icon'] as String,
-      categoryColor = json['category_color'] as String,
-      categoryActive = json['category_active'] as bool,
-      walletId = json['wallet_id'] as String,
-      walletName = json['wallet_name'] as String,
-      walletActive = json['wallet_active'] as bool,
-      created = DateTime.parse(json['created_at'] as String),
-      updated = DateTime.parse(json['updated_at'] as String) {
+  IncomeRecord.fromJson(
+    Map<String, dynamic> json, {
+    String dateField = 'income_date',
+  }) : id = json['id'] as String,
+       title = json['title'] as String,
+       rawAmount = json['amount'] as String,
+       amount = parseWalletMoney(json['amount'] as String),
+       date = DateTime.parse(json[dateField] as String),
+       note = json['note'] as String?,
+       version = json['version'] as int,
+       categoryId = json['category_id'] as String,
+       categoryName = json['category_name'] as String,
+       categoryIcon = json['category_icon'] as String,
+       categoryColor = json['category_color'] as String,
+       categoryActive = json['category_active'] as bool,
+       walletId = json['wallet_id'] as String,
+       walletName = json['wallet_name'] as String,
+       walletActive = json['wallet_active'] as bool,
+       created = DateTime.parse(json['created_at'] as String),
+       updated = DateTime.parse(json['updated_at'] as String) {
     if (json['currency'] != 'LKR') {
       throw const FormatException('Invalid income currency');
     }
@@ -71,6 +73,12 @@ class IncomeSummary {
   IncomeSummary.fromJson(Map<String, dynamic> json)
     : total = parseWalletMoney(json['total'] as String),
       count = json['count'] as int,
+      start = json['start_date'] == null
+          ? null
+          : DateTime.parse(json['start_date'] as String),
+      end = json['end_date'] == null
+          ? null
+          : DateTime.parse(json['end_date'] as String),
       categories = [
         for (final row in json['categories'] as List)
           (
@@ -85,6 +93,7 @@ class IncomeSummary {
 
   final BigInt total;
   final int count;
+  final DateTime? start, end;
   final List<IncomeTotal> categories;
 }
 
@@ -99,8 +108,15 @@ typedef DateTimeRangeValue = ({DateTime start, DateTime end});
 
 typedef PendingIncome = ({String key, Map<String, Object?> draft});
 
+enum ExpensePeriod { day, week, month }
+
 class IncomeRepository {
-  IncomeRepository(this.api);
+  IncomeRepository(this.api, {this.expense = false});
+  final bool expense;
+  String get label => expense ? 'Expense' : 'Income';
+  String get noun => label.toLowerCase();
+  String get route => expense ? '/home/expenses' : '/home/income';
+  String get dateField => expense ? 'expense_date' : 'income_date';
   final ApiClient api;
   PendingIncome? pending;
 
@@ -110,7 +126,7 @@ class IncomeRepository {
     int offset,
   ) async {
     final data = await api.send(
-      Endpoint.incomes,
+      expense ? Endpoint.expenses : Endpoint.incomes,
       bearer: access,
       query: {
         if (filters.search.isNotEmpty) 'q': filters.search,
@@ -127,24 +143,37 @@ class IncomeRepository {
     return (
       items: [
         for (final row in data['items'] as List)
-          IncomeRecord.fromJson(row as Map<String, dynamic>),
+          IncomeRecord.fromJson(
+            row as Map<String, dynamic>,
+            dateField: dateField,
+          ),
       ],
       next: data['next_offset'] as int?,
     );
   }
 
-  Future<IncomeSummary> summary(String access, DateTime month) async =>
-      IncomeSummary.fromJson(
-        await api.send(
-          Endpoint.incomeSummary,
-          bearer: access,
-          query: {'year': '${month.year}', 'month': '${month.month}'},
-        ),
-      );
+  Future<IncomeSummary> summary(
+    String access,
+    DateTime month, {
+    ExpensePeriod period = ExpensePeriod.month,
+  }) async => IncomeSummary.fromJson(
+    await api.send(
+      expense ? Endpoint.expenseSummary : Endpoint.incomeSummary,
+      bearer: access,
+      query: expense
+          ? {'period': period.name, 'date': calendarDate(month)}
+          : {'year': '${month.year}', 'month': '${month.month}'},
+    ),
+  );
 
   Future<IncomeRecord> get(String access, String id) async =>
       IncomeRecord.fromJson(
-        await api.send(Endpoint.income, bearer: access, incomeId: id),
+        await api.send(
+          expense ? Endpoint.expense : Endpoint.income,
+          bearer: access,
+          incomeId: id,
+        ),
+        dateField: dateField,
       );
 
   Future<void> create(
@@ -153,7 +182,7 @@ class IncomeRepository {
     String key,
   ) async {
     await api.send(
-      Endpoint.createIncome,
+      expense ? Endpoint.createExpense : Endpoint.createIncome,
       bearer: access,
       idempotencyKey: key,
       body: {...draft, 'currency': 'LKR'},
@@ -166,7 +195,7 @@ class IncomeRepository {
     Map<String, Object?> draft,
   ) async {
     await api.send(
-      Endpoint.updateIncome,
+      expense ? Endpoint.updateExpense : Endpoint.updateIncome,
       bearer: access,
       incomeId: record.id,
       body: {...draft, 'expected_version': record.version},
@@ -175,7 +204,7 @@ class IncomeRepository {
 
   Future<void> delete(String access, IncomeRecord record) async {
     await api.send(
-      Endpoint.deleteIncome,
+      expense ? Endpoint.deleteExpense : Endpoint.deleteIncome,
       bearer: access,
       incomeId: record.id,
       expectedVersion: record.version,

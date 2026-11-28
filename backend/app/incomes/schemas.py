@@ -55,7 +55,7 @@ ReceivedDate = Annotated[CalendarDate, AfterValidator(received_date)]
 Version = Annotated[int, Field(strict=True, gt=0, le=2_147_483_647)]
 
 
-class IncomeCreate(BaseModel):
+class FinancialCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: Title
@@ -63,11 +63,14 @@ class IncomeCreate(BaseModel):
     currency: Currency
     category_id: UUID
     wallet_id: UUID
-    income_date: ReceivedDate
     note: Note | None = None
 
 
-class IncomeUpdate(BaseModel):
+class IncomeCreate(FinancialCreate):
+    income_date: ReceivedDate
+
+
+class FinancialUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     expected_version: Version
@@ -75,7 +78,6 @@ class IncomeUpdate(BaseModel):
     amount: Amount | None = None
     category_id: UUID | None = None
     wallet_id: UUID | None = None
-    income_date: ReceivedDate | None = None
     note: Note | None = None
 
     @model_validator(mode="after")
@@ -86,12 +88,15 @@ class IncomeUpdate(BaseModel):
         return self
 
 
-class IncomeResponse(BaseModel):
+class IncomeUpdate(FinancialUpdate):
+    income_date: ReceivedDate | None = None
+
+
+class FinancialResponse(BaseModel):
     id: UUID
     title: str
     amount: Money
     currency: Currency
-    income_date: date
     note: str | None
     category_id: UUID
     category_name: str
@@ -104,6 +109,10 @@ class IncomeResponse(BaseModel):
     version: int
     created_at: UtcTimestamp
     updated_at: UtcTimestamp
+
+
+class IncomeResponse(FinancialResponse):
+    income_date: date
 
 
 class IncomePage(BaseModel):
