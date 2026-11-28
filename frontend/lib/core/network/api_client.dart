@@ -26,7 +26,13 @@ enum Endpoint {
   createWallet('POST', 'wallets', 201),
   updateWallet('PATCH', 'wallets/{id}', 200),
   archiveWallet('DELETE', 'wallets/{id}', 204),
-  restoreWallet('POST', 'wallets/{id}/restore', 200);
+  restoreWallet('POST', 'wallets/{id}/restore', 200),
+  incomes('GET', 'incomes', 200),
+  incomeSummary('GET', 'incomes/summary', 200),
+  income('GET', 'incomes/{id}', 200),
+  createIncome('POST', 'incomes', 201),
+  updateIncome('PATCH', 'incomes/{id}', 200),
+  deleteIncome('DELETE', 'incomes/{id}', 204);
 
   const Endpoint(this.method, this.path, this.status);
   final String method;
@@ -74,18 +80,30 @@ class ApiClient {
 
   Future<Map<String, dynamic>> send(
     Endpoint endpoint, {
-    Map<String, String>? body,
+    Map<String, Object?>? body,
     String? bearer,
     String? categoryId,
     String? walletId,
+    String? incomeId,
+    String? idempotencyKey,
+    int? expectedVersion,
     Map<String, String>? query,
   }) async {
     final needsId = endpoint.path.contains('{id}');
     final isWallet = endpoint.path.startsWith('wallets/');
-    final id = isWallet ? walletId : categoryId;
+    final isIncome = endpoint.path.startsWith('incomes/');
+    final id = isIncome
+        ? incomeId
+        : isWallet
+        ? walletId
+        : categoryId;
     if (needsId && (id == null || !_uuid.hasMatch(id))) {
       throw ApiFailure(
-        isWallet ? 'Wallet not found.' : 'Category not found.',
+        isIncome
+            ? 'Income not found.'
+            : isWallet
+            ? 'Wallet not found.'
+            : 'Category not found.',
         status: 404,
       );
     }
@@ -100,6 +118,12 @@ class ApiClient {
     )..followRedirects = false;
     request.headers['Accept'] = 'application/json';
     if (bearer != null) request.headers['Authorization'] = 'Bearer $bearer';
+    if (endpoint == Endpoint.createIncome && idempotencyKey != null) {
+      request.headers['Idempotency-Key'] = idempotencyKey;
+    }
+    if (endpoint == Endpoint.deleteIncome && expectedVersion != null) {
+      request.headers['If-Match'] = '$expectedVersion';
+    }
     if (body != null) {
       request.headers['Content-Type'] = 'application/json';
       request.body = jsonEncode(body);
@@ -184,9 +208,38 @@ class ApiClient {
       409 when endpoint == Endpoint.updateWallet => 'That name is already reserved or the wallet must be restored before editing.',
       409 when endpoint == Endpoint.archiveWallet =>
         'A wallet must have a zero balance before archiving.',
+      404 when endpoint.path.startsWith('incomes') =>
+        'The income or selected wallet or category is unavailable.',
+      409 when endpoint.path.startsWith('incomes') => _incomeConflict(response),
       429 => 'Too many requests. Wait a moment and try again.',
       _ => 'The service could not complete your request.',
     };
     return ApiFailure(message, status: code, uncertain: code >= 500);
+  }
+
+  String _incomeConflict(http.Response response) {
+    const known = {
+      'Income changed. Reload it before continuing.':
+          'Income changed. Reload it before continuing.',
+      'Wallet balance is too low to reverse this income':
+          'The wallet balance is too low to reverse this income.',
+      'Wallet balance would exceed its maximum':
+          'The wallet balance would exceed its maximum.',
+      'Restore the wallet before changing its balance':
+          'Restore the wallet before changing its balance.',
+      'Select an active wallet': 'Select an active wallet.',
+      'Select an active income category': 'Select an active income category.',
+      'This operation key already belongs to a different request': 'This operation key belongs to a different request. Check your income history.',
+    };
+    try {
+      final data = jsonDecode(utf8.decode(response.bodyBytes));
+      if (data is Map<String, dynamic>) {
+        final message = known[data['detail']];
+        if (message != null) return message;
+      }
+    } on FormatException {
+      // Only known, sanitized messages are displayed.
+    }
+    return 'Income conflicts with current data. Reload and check your selection.';
   }
 }

@@ -7,7 +7,8 @@ from app.core.config import Settings
 from app.auth import models  # noqa: F401 - register ORM metadata
 from app.categories import models as category_models  # noqa: F401 - register ORM metadata
 from app.db.base import Base
-from app.db.session import build_engine
+from app.db.session import DatabaseNotConfigured, build_engine
+from app.incomes import models as income_models  # noqa: F401 - register ORM metadata
 from app.wallets import models as wallet_models  # noqa: F401 - register ORM metadata
 
 
@@ -48,7 +49,7 @@ def run():
                 migrate(connection, identity)
         finally:
             engine.dispose()
-    except SQLAlchemyError:
+    except (DatabaseNotConfigured, SQLAlchemyError):
         raise CommandError(
             "Database migration failed. Check the target configuration and privileges."
         ) from None

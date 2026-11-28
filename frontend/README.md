@@ -47,7 +47,7 @@ with engine.connect() as conn:
     assert tuple(conn.execute(text("SELECT current_database(), current_user")).one()) == (
         "expense_tracker_test", "expense_tracker_test_app"
     )
-    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
+    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0006"
 email = f"phase43-manual-{uuid4().hex}@example.com"
 application = create_app(settings)
 application.state.recovery_delivery = lambda *_: None
@@ -98,6 +98,14 @@ Open **Wallets** from Home. My Wallets shows the API’s active balance summary,
 The repository sends and receives exact decimal strings. The client parses responses as `BigInt` minor units and formats LKR amounts with two decimal places on Android and Chrome. The controller refreshes the summary and wallet list after changes, drops stale results, and clears data when the account changes. Secure session renewal can retry eligible reads. Wallet mutations are sent once per explicit action, with follow-up reads used to resolve uncertain outcomes.
 
 Wallet unit and widget tests cover amount precision, HTTP contracts, pagination, account changes, and the guarded wallet flow. The Phase 5.2 headless Chrome wallet test was stopped after it produced no output. Phase 08 still includes live Chrome-to-API smoke testing, comprehensive manual Chrome workflows, and physical Android verification of keyboard insets, system Back, TalkBack, and text scaling.
+
+## Income management
+
+Open **Income** from Home to see the monthly summary, category breakdown, searchable history, and date, category, and wallet filters. History is paginated separately from the monthly summary. Select a record to view its details, edit its fields, or confirm a deletion that reverses its wallet credit. The add and edit screens share the form. New selections are loaded from active income categories and active wallets. Existing archived references stay visible on edits.
+
+Income uses decimal strings over HTTP and BigInt minor units in Flutter. The date picker sends a calendar date and defaults to the modern Colombo business date. The authenticated client renews eligible reads and sends each mutation once. An uncertain creation keeps the payload and original UUIDv4 key in session memory, including while the user checks refreshed history. Reopening the add form offers the original retry and requires explicit reconciliation before a separate submission. A process restart loses the key, so review authoritative history before resubmitting.
+
+Edits and deletions require the record version. A stale response requires an authoritative reload and fresh confirmation before another attempt. Income history and monthly summary reload when the user returns from a mutation screen. Wallet Management fetches authoritative balances on entry. Logout invalidates in-flight data and discards pending form state. Phase 08 still includes live Chrome-to-API verification, comprehensive manual Chrome workflows, and physical Android checks for date and amount entry, keyboard insets, system Back, text scaling, and TalkBack.
 
 ## Verification
 
