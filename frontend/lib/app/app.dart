@@ -9,6 +9,9 @@ import '../features/categories/data/category_repository.dart';
 import '../features/categories/presentation/categories_page.dart';
 import '../features/categories/presentation/category_form.dart';
 import '../features/profile/presentation/account_pages.dart';
+import '../features/wallets/data/wallet_repository.dart';
+import '../features/wallets/presentation/wallet_form.dart';
+import '../features/wallets/presentation/wallet_pages.dart';
 import 'theme.dart';
 
 class ExpenseTrackerApp extends StatefulWidget {
@@ -32,6 +35,7 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
     super.initState();
     final auth = widget.auth;
     final categories = CategoryRepository(auth.repository.client);
+    final wallets = WalletRepository(auth.repository.client);
     GoRoute form(String path, FormAction action) => GoRoute(
       path: path,
       builder: (_, _) => ListenableBuilder(
@@ -79,6 +83,41 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
               routes: [
                 form('password', FormAction.change),
                 form('delete', FormAction.delete),
+              ],
+            ),
+            GoRoute(
+              path: 'wallets',
+              builder: (_, _) =>
+                  WalletsPage(auth, wallets, key: ValueKey(auth.user?.id)),
+              routes: [
+                GoRoute(
+                  path: 'add',
+                  builder: (_, _) =>
+                      WalletForm(auth, wallets, key: ValueKey(auth.user?.id)),
+                ),
+                GoRoute(
+                  path: ':id',
+                  builder: (_, state) => WalletDetailsPage(
+                    auth,
+                    wallets,
+                    state.pathParameters['id']!,
+                    key: ValueKey((auth.user?.id, state.pathParameters['id'])),
+                  ),
+                  routes: [
+                    GoRoute(
+                      path: 'edit',
+                      builder: (_, state) => EditWalletPage(
+                        auth,
+                        wallets,
+                        state.pathParameters['id']!,
+                        key: ValueKey((
+                          auth.user?.id,
+                          state.pathParameters['id'],
+                        )),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
             GoRoute(

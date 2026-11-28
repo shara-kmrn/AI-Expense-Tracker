@@ -47,7 +47,7 @@ with engine.connect() as conn:
     assert tuple(conn.execute(text("SELECT current_database(), current_user")).one()) == (
         "expense_tracker_test", "expense_tracker_test_app"
     )
-    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004"
+    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0005"
 email = f"phase43-manual-{uuid4().hex}@example.com"
 application = create_app(settings)
 application.state.recovery_delivery = lambda *_: None
@@ -90,6 +90,14 @@ Add and edit share a scrollable form with name validation, labeled icon and colo
 The category repository uses the existing HTTP client and session controller. Reads can renew the session and retry once. Writes are sent once per explicit action. Following an uncertain outcome, the app directs the user to check the refreshed list. The controller drops older results after a filter change and clears categories when the session changes. The API is authoritative for Unicode normalization and duplicate names.
 
 The Flutter suite covers category parsing, request construction, guarded routing, filters and search, form and mutation flows, small-screen behavior, and stale-session handling. Phase 08 still includes the automated Chrome category smoke test, comprehensive manual Chrome category workflows, and physical Android checks for keyboard, system Back, TalkBack, and text scaling.
+
+## Wallet management
+
+Open **Wallets** from Home. My Wallets shows the API’s active balance summary, active and archived counts, name search, type filters, pagination, and a separate archived view. Select a wallet to see its current and opening balances, type, status, and dates. Wallet forms reuse the category icon and color palette and badge. Edit keeps the financial fields read-only. Archive requires a zero balance, and a funded wallet cannot be archived until a future transaction or transfer brings its balance to zero.
+
+The repository sends and receives exact decimal strings. The client parses responses as `BigInt` minor units and formats LKR amounts with two decimal places on Android and Chrome. The controller refreshes the summary and wallet list after changes, drops stale results, and clears data when the account changes. Secure session renewal can retry eligible reads. Wallet mutations are sent once per explicit action, with follow-up reads used to resolve uncertain outcomes.
+
+Wallet unit and widget tests cover amount precision, HTTP contracts, pagination, account changes, and the guarded wallet flow. The Phase 5.2 headless Chrome wallet test was stopped after it produced no output. Phase 08 still includes live Chrome-to-API smoke testing, comprehensive manual Chrome workflows, and physical Android verification of keyboard insets, system Back, TalkBack, and text scaling.
 
 ## Verification
 

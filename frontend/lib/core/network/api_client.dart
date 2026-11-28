@@ -19,7 +19,14 @@ enum Endpoint {
   createCategory('POST', 'categories', 201),
   updateCategory('PATCH', 'categories/{id}', 200),
   archiveCategory('DELETE', 'categories/{id}', 204),
-  restoreCategory('POST', 'categories/{id}/restore', 200);
+  restoreCategory('POST', 'categories/{id}/restore', 200),
+  wallets('GET', 'wallets', 200),
+  walletSummary('GET', 'wallets/summary', 200),
+  wallet('GET', 'wallets/{id}', 200),
+  createWallet('POST', 'wallets', 201),
+  updateWallet('PATCH', 'wallets/{id}', 200),
+  archiveWallet('DELETE', 'wallets/{id}', 204),
+  restoreWallet('POST', 'wallets/{id}/restore', 200);
 
   const Endpoint(this.method, this.path, this.status);
   final String method;
@@ -70,14 +77,20 @@ class ApiClient {
     Map<String, String>? body,
     String? bearer,
     String? categoryId,
+    String? walletId,
     Map<String, String>? query,
   }) async {
     final needsId = endpoint.path.contains('{id}');
-    if (needsId && (categoryId == null || !_uuid.hasMatch(categoryId))) {
-      throw const ApiFailure('Category not found.', status: 404);
+    final isWallet = endpoint.path.startsWith('wallets/');
+    final id = isWallet ? walletId : categoryId;
+    if (needsId && (id == null || !_uuid.hasMatch(id))) {
+      throw ApiFailure(
+        isWallet ? 'Wallet not found.' : 'Category not found.',
+        status: 404,
+      );
     }
     final path = needsId
-        ? endpoint.path.replaceAll('{id}', categoryId!)
+        ? endpoint.path.replaceAll('{id}', id!)
         : endpoint.path;
     final abort = Completer<void>();
     final request = http.AbortableRequest(
@@ -165,6 +178,12 @@ class ApiClient {
               endpoint == Endpoint.restoreCategory =>
         'Category not found.',
       422 => 'Check the information you entered.',
+      404 when endpoint.path.startsWith('wallets/') => 'Wallet not found.',
+      409 when endpoint == Endpoint.createWallet =>
+        'That wallet name is already reserved.',
+      409 when endpoint == Endpoint.updateWallet => 'That name is already reserved or the wallet must be restored before editing.',
+      409 when endpoint == Endpoint.archiveWallet =>
+        'A wallet must have a zero balance before archiving.',
       429 => 'Too many requests. Wait a moment and try again.',
       _ => 'The service could not complete your request.',
     };
