@@ -100,14 +100,18 @@ Set-ExpenseTrackerDatabaseUrl TEST_DATABASE_URL expense_tracker_test_app expense
 
 ## Alembic migrations
 
-Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, and `0003` adds password reset records. Online migrations verify the database and role. Downgrading to `0002` removes reset records while preserving accounts and sessions. Run the round trip only against the isolated test database. Apply only the forward upgrade to the development database after testing.
+Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, `0003` adds password reset records, and `0004` adds and backfills categories. Online migrations verify the database and role. Downgrading to `0003` drops all category data while preserving accounts and authentication records. Run the round trip only against the isolated test database. Apply only the forward upgrade to the development database after testing.
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
-.\.venv\Scripts\python.exe -m alembic -x target=test downgrade 0002
+.\.venv\Scripts\python.exe -m alembic -x target=test downgrade 0003
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -m alembic -x target=test current
+.\.venv\Scripts\python.exe -m alembic current
+.\.venv\Scripts\python.exe -m alembic upgrade 0004
+.\.venv\Scripts\python.exe -m alembic current
 ```
 
 ## Start and verify
@@ -153,7 +157,71 @@ The tests still run, and Uvicorn does not use this test client.
 
 The real PostgreSQL tests skip when `TEST_DATABASE_URL` is unset. They verify the connected test database and role before running a migration round trip inside a transaction that is rolled back. Configure both project databases on the same instance for the isolation checks.
 
-The authentication integration suite requires `TEST_DATABASE_URL` and revision `0003` on the isolated test database. It verifies database and role identity, creates uniquely named synthetic accounts, and removes those accounts when finished. SMTP is mocked in tests.
+The authentication and category integration suites require `TEST_DATABASE_URL` and revision `0004` on the isolated test database. They verify database and role identity, create uniquely named synthetic accounts, and remove those accounts when finished. SMTP is mocked in tests.
+
+## Category Management
+
+The authenticated router delegates writes to the category service and owner-scoped queries to the repository. Each category has a UUID, a required owner, display and normalized names, an immutable type, an icon, an uppercase HEX color, an active flag, and timezone-aware timestamps serialized in UTC. A nullable `default_code` identifies protected defaults and supplies the response's `is_default` flag. PostgreSQL enforces owner/type/name and owner/default-code uniqueness, valid category types, icons and colors, and active defaults. The owner/active/type index supports list queries.
+
+Migration `0004` backfills the version 1 defaults. Registration provisions them in the user creation transaction. Conflict-safe inserts preserve existing records on repeated or concurrent provisioning.
+
+| Type | Default | Icon | Color |
+| --- | --- | --- | --- |
+| Income | Salary | `work` | `#E8D5A3` |
+| Income | Freelance | `laptop` | `#C4B5FD` |
+| Income | Business | `store` | `#FBBF24` |
+| Income | Investments | `trending_up` | `#4ADE80` |
+| Income | Gifts | `gift` | `#F9A8D4` |
+| Income | Other Income | `wallet` | `#D4AF37` |
+| Expense | Food & Dining | `restaurant` | `#FDBA74` |
+| Expense | Transport | `car` | `#93C5FD` |
+| Expense | Shopping | `shopping_bag` | `#F9A8D4` |
+| Expense | Housing | `home` | `#E8D5A3` |
+| Expense | Bills & Utilities | `bolt` | `#FBBF24` |
+| Expense | Education | `graduation_cap` | `#C4B5FD` |
+| Expense | Healthcare | `medical` | `#FCA5A5` |
+| Expense | Entertainment | `movie` | `#F9A8D4` |
+| Expense | Travel | `flight` | `#A5F3FC` |
+| Expense | Other Expenses | `category` | `#D4AF37` |
+
+Every route requires an active bearer session. Invalid or revoked sessions receive `401`, invalid input receives `422`, and foreign and nonexistent IDs share a generic `404`.
+
+| Method and path | Operation | Responses |
+| --- | --- | --- |
+| `GET /api/v1/categories` | List owned categories | `200` |
+| `GET /api/v1/categories/{id}` | Read an owned category | `200`, `404` |
+| `POST /api/v1/categories` | Create a custom category | `201`, `409` |
+| `PATCH /api/v1/categories/{id}` | Update name, icon, or color | `200`, `403`, `404`, `409` |
+| `DELETE /api/v1/categories/{id}` | Archive a custom category | `204`, `403`, `404` |
+| `POST /api/v1/categories/{id}/restore` | Restore a custom category | `200`, `403`, `404` |
+
+Lists accept `type=INCOME|EXPENSE`, `q` for a literal normalized substring, `active=true|false` (default true), and optional `default=true|false`. Results sort by default status first, normalized name, type, and UUID. `limit` defaults to 50 and accepts 1–100. `offset` defaults to zero and accepts 0–1,000,000. The list response contains `items` and a nullable `next_offset`.
+
+A create request accepts the following fields.
+
+```json
+{"name":"University Expenses","type":"EXPENSE","icon":"graduation_cap","color":"#D4AF37"}
+```
+
+The category response has this shape.
+
+```json
+{
+  "id":"10000000-0000-4000-8000-000000000001",
+  "name":"University Expenses",
+  "type":"EXPENSE",
+  "icon":"graduation_cap",
+  "color":"#D4AF37",
+  "is_default":false,
+  "is_active":true,
+  "created_at":"2026-11-28T12:00:00Z",
+  "updated_at":"2026-11-28T12:00:00Z"
+}
+```
+
+Names reject Unicode control, format, and surrogate code points. The API applies NFKC, trims and collapses whitespace, then requires 1–80 code points. Comparison uses Unicode case folding followed by NFKC. The API accepts the listed icon identifiers and six-digit HEX colors with a leading hash. Request bodies reject unknown and server-managed fields. Ownership comes from the session.
+
+Default mutations return `403`. Archived names remain reserved per user and type, so duplicate creates and renames return `409`. Repeated archive and restore requests succeed for an owned custom category. Account deletion cascades to owned categories. Future transaction writes must validate category ownership, type, and active status. Future financial foreign keys need to preserve historical category references and account deletion semantics.
 
 ## Authentication
 

@@ -1,6 +1,6 @@
 # AI Expense Tracker frontend
 
-The Flutter client targets Android. Phase 4.3 covers authentication, profile management, and account security. Chrome provides a temporary local test target.
+The Flutter client targets Android. Phase 4.3 covers authentication, profile management, and account security. Phase 5.1 adds category management. Chrome provides a temporary local test target.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ with engine.connect() as conn:
     assert tuple(conn.execute(text("SELECT current_database(), current_user")).one()) == (
         "expense_tracker_test", "expense_tracker_test_app"
     )
-    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0003"
+    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004"
 email = f"phase43-manual-{uuid4().hex}@example.com"
 application = create_app(settings)
 application.state.recovery_delivery = lambda *_: None
@@ -80,6 +80,16 @@ For a physical device use a trusted HTTPS API URL via `--dart-define=API_BASE_UR
 Startup restores a saved refresh credential and loads the current profile. Registration and reset return to sign-in. Sign-in opens Home. Protected routes include Home, profile and editing, settings, password change, and debug-only account deletion. The frontend gate for deletion does not replace production server policy.
 
 Access tokens remain in memory. Android persists only the refresh credential through secure storage. Chrome uses memory only, so reload requires sign-in. A single pending refresh is shared across concurrent requests. A read can retry once after rotation; account mutations are never replayed. When a refresh outcome is uncertain, local credentials are cleared and the user signs in again. Logout invalidates stale completions and clears local credentials even when remote revocation cannot be confirmed. Password changes and deletion clear local authentication after success.
+
+## Category Management
+
+From Home, open **Categories** to browse authenticated API results by Income or Expense, search by name, and switch between active and archived categories. The active view groups protected defaults and custom categories. Custom actions include editing and confirming archival. The archived view offers restoration.
+
+Add and edit share a scrollable form with name validation, labeled icon and color choices, and a live preview. Edit displays the type as read-only. Stable icon identifiers map to Material icons, with a generic category icon for unknown identifiers. Badges accept valid API HEX colors and choose a contrasting foreground. The picker offers named presets and marks the selected choice.
+
+The category repository uses the existing HTTP client and session controller. Reads can renew the session and retry once. Writes are sent once per explicit action. Following an uncertain outcome, the app directs the user to check the refreshed list. The controller drops older results after a filter change and clears categories when the session changes. The API is authoritative for Unicode normalization and duplicate names.
+
+The Flutter suite covers category parsing, request construction, guarded routing, filters and search, form and mutation flows, small-screen behavior, and stale-session handling. Phase 08 still includes the automated Chrome category smoke test, comprehensive manual Chrome category workflows, and physical Android checks for keyboard, system Back, TalkBack, and text scaling.
 
 ## Verification
 

@@ -193,6 +193,13 @@ class AuthController extends ChangeNotifier {
     }
   }
 
+  Future<T> authenticatedRead<T>(Future<T> Function(String access) request) =>
+      _authorized(request, retryRead: true);
+
+  Future<T> authenticatedMutation<T>(
+    Future<T> Function(String access) request,
+  ) => _authorized(request);
+
   Future<void> loadProfile() async {
     final epoch = _epoch;
     final profile = await _authorized(repository.profile, retryRead: true);
