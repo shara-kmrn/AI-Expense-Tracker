@@ -229,6 +229,7 @@ def test_migration_preserves_income_and_blocks_populated_expense_downgrade(conte
         command.upgrade(config, "0007")
         assert conn.scalar(select(func.count()).select_from(Income)) == 1
         assert conn.scalar(select(func.count()).select_from(IncomeCreation)) == 1
+        command.upgrade(config, "0008")
         assert wallet_discrepancies(conn) == 0
         conn.rollback()
     assert balance(client, owner, draft["wallet_id"]) == "15.02"

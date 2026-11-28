@@ -123,6 +123,11 @@ class _WalletsPageState extends State<WalletsPage> {
               'Add wallet',
               onPressed: () => _open('$walletsRoute/add'),
             ),
+          if (!_state.archived)
+            AppSecondaryButton(
+              'Transfer',
+              onPressed: () => _open('/home/transfers/add'),
+            ),
           AppSecondaryButton(
             _state.archived ? 'Active wallets' : 'Archived wallets',
             onPressed: _state.toggleArchived,

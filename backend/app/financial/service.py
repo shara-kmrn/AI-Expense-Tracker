@@ -27,11 +27,11 @@ class FinancialOperation:
     view: Callable
 
 
-def lock_owner(db, owner, operation):
+def lock_owner(db, owner, label):
     # Account deletion locks the same user before cascading into financial rows.
     user = db.scalar(select(User.id).where(User.id == owner).with_for_update(read=True, key_share=True))
     if user is None:
-        raise AuthError(404, f"{operation.label} not found")
+        raise AuthError(404, f"{label} not found")
 
 
 def lock_record(db, owner, record_id, operation):
@@ -71,61 +71,78 @@ def lock_category(db, owner, category_id, operation, *, require_active):
     return category
 
 
-def check_wallet(wallet, currency, operation, *, require_active):
+def check_wallet(wallet, currency, label, *, require_active):
     if wallet.currency != currency:
-        raise AuthError(409, f"{operation.label} and wallet currencies must match")
+        raise AuthError(409, f"{label} and wallet currencies must match")
     if require_active and not wallet.is_active:
         raise AuthError(409, "Select an active wallet")
 
 
-def adjust(wallet, delta, operation):
+def balance_after(wallet, delta, *, insufficient="Insufficient wallet balance"):
     with localcontext() as context:
         context.prec = 24
         balance = wallet.current_balance + delta
     if balance < 0:
-        raise AuthError(409, "Insufficient wallet balance" if operation.direction == -1
-                        else "Wallet balance is too low to reverse this income")
+        raise AuthError(409, insufficient)
     if balance > MAX_BALANCE:
         raise AuthError(409, "Wallet balance would exceed its maximum")
     if not wallet.is_active and balance != 0:
         raise AuthError(409, "Restore the wallet before changing its balance")
-    wallet.current_balance = balance
+    return balance
 
 
-def create(db, owner, key, data, operation):
-    lock_owner(db, owner, operation)
-    replay = operation.replay
-    fields = data.model_dump(mode="json")
-    amount = Decimal(data.amount)
-    fields["amount"] = format(amount, ".2f")
+def adjust(wallet, delta, operation):
+    wallet.current_balance = balance_after(
+        wallet, delta, insufficient="Insufficient wallet balance" if operation.direction == -1
+        else "Wallet balance is too low to reverse this income",
+    )
+
+
+def claim_replay(db, replay, identity, fields):
+    if "amount" in fields:
+        fields = {**fields, "amount": format(Decimal(fields["amount"]), ".2f")}
     fingerprint = hashlib.sha256(json.dumps(
         fields, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
     ).encode()).hexdigest()
     claimed = db.scalar(insert(replay).values(
-        user_id=owner, key=key, fingerprint=fingerprint, response={},
+        **identity, fingerprint=fingerprint, response={},
     ).on_conflict_do_nothing().returning(replay.key))
     if claimed is None:
-        previous = db.get(replay, (owner, key))
+        previous = db.get(replay, identity)
         if previous.fingerprint != fingerprint:
             raise AuthError(409, "This operation key already belongs to a different request")
-        return operation.response.model_validate(previous.response)
+        return previous.response
+    return None
+
+
+def persist_replay(db, replay, identity, result):
+    db.execute(update(replay).where(
+        *(getattr(replay, key) == value for key, value in identity.items())
+    ).values(response=result.model_dump(mode="json")))
+
+
+def create(db, owner, key, data, operation):
+    lock_owner(db, owner, operation.label)
+    identity = {"user_id": owner, "key": key}
+    previous = claim_replay(db, operation.replay, identity, data.model_dump(mode="json"))
+    if previous is not None:
+        return operation.response.model_validate(previous)
+    amount = Decimal(data.amount)
     wallet = lock_wallets(db, owner, {data.wallet_id})[data.wallet_id]
     category = lock_category(db, owner, data.category_id, operation, require_active=True)
-    check_wallet(wallet, data.currency, operation, require_active=True)
+    check_wallet(wallet, data.currency, operation.label, require_active=True)
     adjust(wallet, operation.direction * amount, operation)
     record = operation.record(**data.model_dump(exclude={"amount"}), id=uuid4(), user_id=owner, amount=amount)
     db.add(record)
     db.flush()
     result = operation.view(record, wallet, category)
-    db.execute(update(replay).where(
-        replay.user_id == owner, replay.key == key,
-    ).values(response=result.model_dump(mode="json")))
+    persist_replay(db, operation.replay, identity, result)
     db.commit()
     return result
 
 
 def edit(db, owner, record_id, data, operation):
-    lock_owner(db, owner, operation)
+    lock_owner(db, owner, operation.label)
     record = lock_record(db, owner, record_id, operation)
     if record.deleted_at is not None:
         raise AuthError(404, f"{operation.label} not found")
@@ -138,7 +155,7 @@ def edit(db, owner, record_id, data, operation):
     wallet = wallets[wallet_id]
     moved = wallet_id != record.wallet_id
     category = lock_category(db, owner, category_id, operation, require_active=category_id != record.category_id)
-    check_wallet(wallet, record.currency, operation, require_active=moved)
+    check_wallet(wallet, record.currency, operation.label, require_active=moved)
     if moved:
         adjust(wallets[record.wallet_id], -operation.direction * record.amount, operation)
         adjust(wallet, operation.direction * amount, operation)
@@ -157,7 +174,7 @@ def edit(db, owner, record_id, data, operation):
 
 
 def delete(db, owner, record_id, expected, operation):
-    lock_owner(db, owner, operation)
+    lock_owner(db, owner, operation.label)
     record = lock_record(db, owner, record_id, operation)
     if record.deleted_at is not None:
         return

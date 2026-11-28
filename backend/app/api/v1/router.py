@@ -5,6 +5,7 @@ from app.api.v1.categories import router as categories_router
 from app.api.v1.expenses import router as expenses_router
 from app.api.v1.health import router as health_router
 from app.api.v1.incomes import router as incomes_router
+from app.api.v1.transfers import router as transfers_router
 from app.api.v1.users import router as users_router
 from app.api.v1.wallets import router as wallets_router
 
@@ -16,3 +17,4 @@ router.include_router(categories_router)
 router.include_router(wallets_router)
 router.include_router(incomes_router)
 router.include_router(expenses_router)
+router.include_router(transfers_router)
