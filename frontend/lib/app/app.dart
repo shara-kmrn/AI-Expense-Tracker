@@ -5,6 +5,9 @@ import 'package:go_router/go_router.dart';
 import '../core/widgets/app_widgets.dart';
 import '../features/auth/presentation/auth_controller.dart';
 import '../features/auth/presentation/auth_forms.dart';
+import '../features/categories/data/category_repository.dart';
+import '../features/categories/presentation/categories_page.dart';
+import '../features/categories/presentation/category_form.dart';
 import '../features/profile/presentation/account_pages.dart';
 import 'theme.dart';
 
@@ -28,6 +31,7 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
   void initState() {
     super.initState();
     final auth = widget.auth;
+    final categories = CategoryRepository(auth.repository.client);
     GoRoute form(String path, FormAction action) => GoRoute(
       path: path,
       builder: (_, _) => ListenableBuilder(
@@ -75,6 +79,31 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
               routes: [
                 form('password', FormAction.change),
                 form('delete', FormAction.delete),
+              ],
+            ),
+            GoRoute(
+              path: 'categories',
+              builder: (_, _) => CategoriesPage(auth, categories),
+              routes: [
+                GoRoute(
+                  path: 'add',
+                  builder: (_, state) => CategoryForm(
+                    auth,
+                    categories,
+                    state.uri.queryParameters['type'] ==
+                            CategoryType.income.code
+                        ? CategoryType.income
+                        : CategoryType.expense,
+                  ),
+                ),
+                GoRoute(
+                  path: ':id/edit',
+                  builder: (_, state) => EditCategoryPage(
+                    auth,
+                    categories,
+                    state.pathParameters['id']!,
+                  ),
+                ),
               ],
             ),
           ],

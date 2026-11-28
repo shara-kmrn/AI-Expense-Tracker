@@ -13,7 +13,13 @@ enum Endpoint {
   profile('GET', 'users/me', 200),
   editProfile('PATCH', 'users/me', 200),
   changePassword('POST', 'auth/change-password', 204),
-  deleteAccount('DELETE', 'users/me', 204);
+  deleteAccount('DELETE', 'users/me', 204),
+  categories('GET', 'categories', 200),
+  category('GET', 'categories/{id}', 200),
+  createCategory('POST', 'categories', 201),
+  updateCategory('PATCH', 'categories/{id}', 200),
+  archiveCategory('DELETE', 'categories/{id}', 204),
+  restoreCategory('POST', 'categories/{id}/restore', 200);
 
   const Endpoint(this.method, this.path, this.status);
   final String method;
@@ -63,11 +69,20 @@ class ApiClient {
     Endpoint endpoint, {
     Map<String, String>? body,
     String? bearer,
+    String? categoryId,
+    Map<String, String>? query,
   }) async {
+    final needsId = endpoint.path.contains('{id}');
+    if (needsId && (categoryId == null || !_uuid.hasMatch(categoryId))) {
+      throw const ApiFailure('Category not found.', status: 404);
+    }
+    final path = needsId
+        ? endpoint.path.replaceAll('{id}', categoryId!)
+        : endpoint.path;
     final abort = Completer<void>();
     final request = http.AbortableRequest(
       endpoint.method,
-      _base.resolve(endpoint.path),
+      _base.resolve(path).replace(queryParameters: query),
       abortTrigger: abort.future,
     )..followRedirects = false;
     request.headers['Accept'] = 'application/json';
@@ -117,6 +132,10 @@ class ApiClient {
     );
   }
 
+  static final _uuid = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
   ApiFailure _failure(Endpoint endpoint, http.Response response) {
     final code = response.statusCode;
     final message = switch (code) {
@@ -130,6 +149,21 @@ class ApiClient {
       401 => 'Your session ended. Sign in again.',
       409 when endpoint == Endpoint.register =>
         'An account could not be created with that email.',
+      409
+          when endpoint == Endpoint.createCategory ||
+              endpoint == Endpoint.updateCategory =>
+        'That name is already reserved for this type. Check archived categories.',
+      403
+          when endpoint == Endpoint.updateCategory ||
+              endpoint == Endpoint.archiveCategory ||
+              endpoint == Endpoint.restoreCategory =>
+        'Default categories are protected.',
+      404
+          when endpoint == Endpoint.category ||
+              endpoint == Endpoint.updateCategory ||
+              endpoint == Endpoint.archiveCategory ||
+              endpoint == Endpoint.restoreCategory =>
+        'Category not found.',
       422 => 'Check the information you entered.',
       429 => 'Too many requests. Wait a moment and try again.',
       _ => 'The service could not complete your request.',

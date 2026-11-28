@@ -67,6 +67,7 @@ DateTime _date(Map<String, dynamic> json, String key) =>
 class AuthRepository {
   const AuthRepository(this._api);
   final ApiClient _api;
+  ApiClient get client => _api;
 
   Future<Credentials> login(String email, String password) async {
     final requestedAt = DateTime.now();

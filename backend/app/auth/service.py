@@ -12,6 +12,7 @@ from app.auth.repository import lock_family, lock_user, token_location, user_by_
 from app.auth.schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 from app.auth.tokens import digest_token, issue_access, new_refresh_token
 from app.core.config import Settings
+from app.categories.repository import provision_defaults
 
 
 def register(db: Session, data: RegisterRequest) -> UserResponse:
@@ -23,6 +24,7 @@ def register(db: Session, data: RegisterRequest) -> UserResponse:
         with db.begin():
             db.add(user)
             db.flush()
+            provision_defaults(db, user.id)
             return UserResponse.model_validate(user)
     except IntegrityError as error:
         if getattr(getattr(error.orig, "diag", None), "constraint_name", None) == "uq_users_email":
