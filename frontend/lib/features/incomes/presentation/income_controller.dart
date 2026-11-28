@@ -27,6 +27,7 @@ class IncomeController extends ChangeNotifier {
   Timer? _debounce;
   IncomeFilters filters = emptyIncomeFilters;
   DateTime month = colomboToday();
+  ExpensePeriod period = ExpensePeriod.month;
   List<IncomeRecord> items = [];
   IncomeSummary? summary;
   int? next;
@@ -41,6 +42,7 @@ class IncomeController extends ChangeNotifier {
     _owner = owner;
     filters = emptyIncomeFilters;
     month = colomboToday();
+    period = ExpensePeriod.month;
     unawaited(reload());
   }
 
@@ -81,6 +83,12 @@ class IncomeController extends ChangeNotifier {
 
   void selectMonth(DateTime value) {
     month = DateTime(value.year, value.month);
+    unawaited(reloadSummary());
+  }
+
+  void selectExpensePeriod(DateTime date, ExpensePeriod value) {
+    month = date;
+    period = value;
     unawaited(reloadSummary());
   }
 
@@ -132,6 +140,7 @@ class IncomeController extends ChangeNotifier {
   Future<void> reloadSummary() async {
     final revision = ++_summaryRevision;
     final selected = month;
+    final selectedPeriod = period;
     summary = null;
     summaryError = null;
     loadingSummary = _owner != null;
@@ -139,7 +148,8 @@ class IncomeController extends ChangeNotifier {
     if (_owner == null) return;
     try {
       final result = await auth.authenticatedRead(
-        (access) => repository.summary(access, selected),
+        (access) =>
+            repository.summary(access, selected, period: selectedPeriod),
       );
       if (!_disposed && revision == _summaryRevision) summary = result;
     } catch (error) {

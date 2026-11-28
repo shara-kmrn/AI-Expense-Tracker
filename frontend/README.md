@@ -47,7 +47,7 @@ with engine.connect() as conn:
     assert tuple(conn.execute(text("SELECT current_database(), current_user")).one()) == (
         "expense_tracker_test", "expense_tracker_test_app"
     )
-    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0006"
+    assert conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0007"
 email = f"phase43-manual-{uuid4().hex}@example.com"
 application = create_app(settings)
 application.state.recovery_delivery = lambda *_: None
@@ -93,7 +93,7 @@ The Flutter suite covers category parsing, request construction, guarded routing
 
 ## Wallet management
 
-Open **Wallets** from Home. My Wallets shows the API’s active balance summary, active and archived counts, name search, type filters, pagination, and a separate archived view. Select a wallet to see its current and opening balances, type, status, and dates. Wallet forms reuse the category icon and color palette and badge. Edit keeps the financial fields read-only. Archive requires a zero balance, and a funded wallet cannot be archived until a future transaction or transfer brings its balance to zero.
+Open **Wallets** from Home. My Wallets shows the API’s active balance summary, active and archived counts, name search, type filters, pagination, and a separate archived view. Select a wallet to see its current and opening balances, type, status, and dates. Wallet forms reuse the category icon and color palette and badge. Edit keeps the financial fields read-only. Income and expenses update the current balance. Archive requires an exact zero balance.
 
 The repository sends and receives exact decimal strings. The client parses responses as `BigInt` minor units and formats LKR amounts with two decimal places on Android and Chrome. The controller refreshes the summary and wallet list after changes, drops stale results, and clears data when the account changes. Secure session renewal can retry eligible reads. Wallet mutations are sent once per explicit action, with follow-up reads used to resolve uncertain outcomes.
 
@@ -106,6 +106,14 @@ Open **Income** from Home to see the monthly summary, category breakdown, search
 Income uses decimal strings over HTTP and BigInt minor units in Flutter. The date picker sends a calendar date and defaults to the modern Colombo business date. The authenticated client renews eligible reads and sends each mutation once. An uncertain creation keeps the payload and original UUIDv4 key in session memory, including while the user checks refreshed history. Reopening the add form offers the original retry and requires explicit reconciliation before a separate submission. A process restart loses the key, so review authoritative history before resubmitting.
 
 Edits and deletions require the record version. A stale response requires an authoritative reload and fresh confirmation before another attempt. Income history and monthly summary reload when the user returns from a mutation screen. Wallet Management fetches authoritative balances on entry. Logout invalidates in-flight data and discards pending form state. Phase 08 still includes live Chrome-to-API verification, comprehensive manual Chrome workflows, and physical Android checks for date and amount entry, keyboard insets, system Back, text scaling, and TalkBack.
+
+## Expense management
+
+Open **Expenses** from Home. The page shares the income history and form components and shows a red signed expense amount, daily, Monday-start weekly, or monthly totals, category breakdown, and searchable history with date, category, and wallet filters. The summary is calculated by the API across the selected calendar period.
+
+Add and edit use active expense categories and wallets, preserving unchanged historical references. The form shows the loaded wallet balance and estimated remaining balance using BigInt minor units. An edit on the same wallet includes the original expense when estimating the available amount. The server checks the current balance at submission. A confirmed deletion credits the wallet once.
+
+Expense creation has its own in-memory pending operation and uses the original UUIDv4 key and payload for an explicit retry. After a restart, reconcile authoritative history before resubmitting. Version conflicts and uncertain edits or deletions require a reload. Wallet Management fetches authoritative balances on entry. Automated tests exercise exact amounts, period selection, and the guarded transaction flow. Live Chrome-to-API, manual Chrome, and physical Android checks remain deferred to Phase 08.
 
 ## Verification
 

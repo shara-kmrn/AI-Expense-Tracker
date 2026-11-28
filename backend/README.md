@@ -100,7 +100,7 @@ Set-ExpenseTrackerDatabaseUrl TEST_DATABASE_URL expense_tracker_test_app expense
 
 ## Alembic migrations
 
-Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, `0003` adds password reset records, `0004` adds and backfills categories, `0005` adds wallets, and `0006` adds income. Online migrations verify the database and role. The income migration tests exercise the rollback in an isolated transaction. Apply only the forward upgrade to the development database after testing.
+Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, `0003` adds password reset records, `0004` adds and backfills categories, `0005` adds wallets, `0006` adds income, and `0007` adds expenses. Online migrations verify the database and role. Financial migration tests exercise downgrades in isolated transactions. Apply only the forward upgrade to the development database after testing.
 
 ```powershell
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
@@ -108,7 +108,7 @@ Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002
 .\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m alembic -x target=test current
 .\.venv\Scripts\python.exe -m alembic current
-.\.venv\Scripts\python.exe -m alembic upgrade 0006
+.\.venv\Scripts\python.exe -m alembic upgrade 0007
 .\.venv\Scripts\python.exe -m alembic current
 ```
 
@@ -155,9 +155,35 @@ The tests still run, and Uvicorn does not use this test client.
 
 The real PostgreSQL tests skip when `TEST_DATABASE_URL` is unset. They verify the connected test database and role before running a migration round trip inside a transaction that is rolled back. Configure both project databases on the same instance for the isolation checks.
 
-The authentication, category, wallet, and income integration suites require `TEST_DATABASE_URL` and revision `0006` on the isolated test database. They verify database and role identity, create uniquely named synthetic accounts, and remove those accounts when finished. SMTP is mocked in tests.
+The authentication, category, wallet, income, and expense integration suites require `TEST_DATABASE_URL` and revision `0007` on the isolated test database. They verify database and role identity, create uniquely named synthetic accounts, and remove those accounts when finished. SMTP is mocked in tests.
 
 Connection failures report a sanitized PostgreSQL diagnostic. The application engine suppresses informational SQL and pool logging and hides bound parameters. The pytest configuration keeps tracebacks while suppressing frame locals, which can contain driver configuration. For a connection failure, verify the isolated database identity, listener, and role with an interactive `psql` session.
+
+## Expense management
+
+Expenses share Income Management's owner-first transaction and replay service. The `expenses` table stores positive `NUMERIC(18,2)` amounts, a Colombo calendar `expense_date`, UTC technical timestamps, a version, and a nullable deletion timestamp. Composite foreign keys reference the existing owner-and-ID constraints on wallets and categories. History indexes are scoped by owner, date, wallet, and category. Account deletion cascades to expense records and replay results as well as to existing income records.
+
+The authenticated API is under `/api/v1/expenses`. History accepts `q` (literal title or note search), inclusive `date_from` and `date_to`, `category_id`, `wallet_id`, `limit` (1–100, default 50), and `offset`. It returns `items` and nullable `next_offset`, ordered by expense date, creation time, and ID descending. Details return the active record, version, and display data for the referenced wallet and category. Missing, foreign, and deleted records return `404`.
+
+Use `POST /api/v1/expenses` with a UUIDv4 `Idempotency-Key`. It returns `201`, including on an identical replay. A different payload with the same key returns `409`. Expense keys are scoped to the owner separately from income keys and are retained until account deletion. The server persists the original response alongside the deduction and record in one transaction.
+
+```json
+{"title":"Groceries","amount":"50.20","currency":"LKR","wallet_id":"10000000-0000-4000-8000-000000000001","category_id":"10000000-0000-4000-8000-000000000002","expense_date":"2026-11-28","note":"Weekly groceries"}
+```
+
+`PATCH /api/v1/expenses/{id}` requires `expected_version` and at least one editable field. An amount change refunds the old amount and deducts the new amount as a single net change when the wallet stays the same. Reassignment refunds the source and deducts from the destination in one transaction. `DELETE /api/v1/expenses/{id}` requires an integer `If-Match` version and returns `204`, including for a repeated delete. It refunds the expense once and retains the tombstone. Stale versions, insufficient funds, archived-reference conflicts, and wallet overflow return `409`. Invalid input returns `422`.
+
+Use positive exact LKR decimal strings with up to two fractional digits and a maximum of `9999999999999999.99`. Historical dates through the current Colombo business date are accepted. Creation and new assignments require active wallets and EXPENSE categories. Historical references remain visible. An archived wallet may need restoration before an edit or refund. Only an exact zero balance may remain archived.
+
+`GET /api/v1/expenses/summary` requires `period=day|week|month` and an ISO calendar `date`. Weeks run Monday through Sunday. Bounds are inclusive. PostgreSQL sums exact amounts independently of history filters and pagination, including historical archived references and excluding deleted records.
+
+```json
+{"currency":"LKR","period":"day","start_date":"2026-11-28","end_date":"2026-11-28","total":"50.20","count":1,"categories":[{"category_id":"10000000-0000-4000-8000-000000000002","name":"Food","total":"50.20"}]}
+```
+
+Income and expense writers lock the owner, replay key or record, wallets in UUID order, and category where needed. Wallet and category archival lock their respective rows. Account deletion locks the owner before cascading. Future transfers must use the same owner and wallet ordering. Reconcile in a read-only transaction using `app.financial.reconciliation.wallet_discrepancies`, which compares current balance against opening balance plus active income minus active expenses.
+
+Revision `0007` creates expense and replay tables while preserving existing balances and income. Downgrade to `0006` takes exclusive locks and refuses if either expense table contains data. Run the isolated test migration and complete pytest suite before applying the forward migration to development. The previously exposed local test credential remains a separate unresolved issue. The credential redaction safeguards remain active.
 
 ## Income management
 
@@ -200,7 +226,7 @@ The `wallets` table stores a stable UUID, required owner UUID, display and norma
 
 LKR and no overdrafts are provisional rules. Both balances use `NUMERIC(18,2)` and Python `Decimal`. Opening balances accept unsigned strings with 1–16 ASCII digits before the decimal point and up to two fractional digits. A decimal point requires at least one following digit. The per-wallet range is `0.00` to `9999999999999999.99`. Exponents, signs, separators, whitespace, excess precision, nonfinite values, and JSON numbers fail validation. Serialized amounts always have two fractional digits. PostgreSQL aggregates exact decimals and the summary can exceed the per-wallet limit.
 
-Creation initializes current balance from opening balance. Metadata edits accept name, icon, and color. Type, currency, balances, ownership, and archive state are server-controlled after creation. Restore an archived wallet before editing. Archival locks the wallet row and requires an exact zero balance. Repeating archive or restore succeeds and preserves the UUID and amounts. Funded wallets remain active until future transaction or transfer features can reduce their balance to zero.
+Creation initializes current balance from opening balance. Income and expense operations adjust current balance atomically. Metadata edits accept name, icon, and color. Type, currency, balances, ownership, and archive state are server-controlled after creation. Restore an archived wallet before editing. Archival locks the wallet row and requires an exact zero balance. Repeating archive or restore succeeds and preserves the UUID and amounts.
 
 | Method and path | Operation | Responses |
 | --- | --- | --- |

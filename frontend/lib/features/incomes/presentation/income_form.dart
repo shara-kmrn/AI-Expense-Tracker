@@ -5,6 +5,7 @@ import '../../../app/theme.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../wallets/data/wallet_repository.dart';
 import '../data/income_choices.dart';
 import '../data/income_repository.dart';
 import 'income_controller.dart';
@@ -50,7 +51,9 @@ class _IncomeEditorState extends State<IncomeEditor> {
 
   @override
   Widget build(BuildContext context) => AuthScreenLayout(
-    title: widget.id == null ? 'Add income' : 'Edit income',
+    title: widget.id == null
+        ? 'Add ${widget.repository.noun}'
+        : 'Edit ${widget.repository.noun}',
     child: FutureBuilder(
       future: _options,
       builder: (context, snapshot) {
@@ -71,6 +74,7 @@ class _IncomeEditorState extends State<IncomeEditor> {
           widget.repository,
           data.$1,
           data.$2,
+          onChoicesChanged: _retry,
           key: ValueKey(data.$2?.version),
         );
       },
@@ -84,12 +88,14 @@ class _IncomeForm extends StatefulWidget {
     this.repository,
     this.choices,
     this.record, {
+    required this.onChoicesChanged,
     super.key,
   });
   final AuthController auth;
   final IncomeRepository repository;
   final IncomeChoices choices;
   final IncomeRecord? record;
+  final VoidCallback onChoicesChanged;
 
   @override
   State<_IncomeForm> createState() => _IncomeFormState();
@@ -97,6 +103,9 @@ class _IncomeForm extends StatefulWidget {
 
 class _IncomeFormState extends State<_IncomeForm> {
   final _form = GlobalKey<FormState>();
+  String get _noun => widget.repository.noun;
+  String get _label => widget.repository.label;
+  bool get _expense => widget.repository.expense;
   late final _initial = widget.record == null
       ? widget.repository.pending
       : null;
@@ -113,18 +122,23 @@ class _IncomeFormState extends State<_IncomeForm> {
   late String? _wallet = widget.record?.walletId ?? _saved('wallet_id');
   late DateTime _date =
       widget.record?.date ??
-      DateTime.tryParse(_saved('income_date') ?? '') ??
+      DateTime.tryParse(_saved(widget.repository.dateField) ?? '') ??
       colomboToday();
   bool _busy = false;
   late bool _uncertain = _initial != null;
   bool _stale = false;
   late String? _error = _initial == null
       ? null
-      : 'A previous income submission is unresolved.';
+      : 'A previous $_noun submission is unresolved.';
   late String? _operation = _initial?.key;
   late Map<String, Object?>? _pendingDraft = _initial?.draft;
 
   String? _saved(String field) => _initial?.draft[field] as String?;
+
+  Future<void> _openManagement(String path) async {
+    await context.push(path);
+    if (mounted) widget.onChoicesChanged();
+  }
 
   Future<void> _save() async {
     if (_busy || _stale) return;
@@ -143,7 +157,7 @@ class _IncomeFormState extends State<_IncomeForm> {
           'amount': _amount.text,
           'wallet_id': _wallet,
           'category_id': _category,
-          'income_date': calendarDate(_date),
+          widget.repository.dateField: calendarDate(_date),
           'note': _note.text.trim().isEmpty ? null : _note.text.trim(),
         };
     if (record == null) {
@@ -161,7 +175,7 @@ class _IncomeFormState extends State<_IncomeForm> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            record == null ? 'Income recorded.' : 'Income updated.',
+            record == null ? '$_label recorded.' : '$_label updated.',
           ),
         ),
       );
@@ -175,7 +189,7 @@ class _IncomeFormState extends State<_IncomeForm> {
             record != null &&
             (failure?.status == 404 ||
                 failure?.message ==
-                    'Income changed. Reload it before continuing.');
+                    '$_label changed. Reload it before continuing.');
         if (!_uncertain) {
           _operation = null;
           _pendingDraft = null;
@@ -184,7 +198,7 @@ class _IncomeFormState extends State<_IncomeForm> {
           widget.repository.pending = (key: _operation!, draft: _pendingDraft!);
         }
         _error = _uncertain
-            ? 'The result is uncertain. Check authoritative income history before starting a new submission.'
+            ? 'The result is uncertain. Check authoritative $_noun history before starting a new submission.'
             : incomeError(error);
       });
     } finally {
@@ -196,8 +210,9 @@ class _IncomeFormState extends State<_IncomeForm> {
     if (widget.record == null &&
         !await confirmAction(
           context,
-          title: 'Check income history?',
-          description: 'Confirm whether the earlier income appears in history before entering it again. You can retry here with the same operation key.',
+          title: 'Check $_noun history?',
+          description:
+              'Confirm whether the earlier $_noun appears in history before entering it again. You can retry here with the same operation key.',
           action: 'Open history',
         )) {
       return;
@@ -209,7 +224,8 @@ class _IncomeFormState extends State<_IncomeForm> {
     if (!await confirmAction(
       context,
       title: 'Resolve previous submission?',
-      description: 'Confirm that you reviewed current income history and resolved the earlier submission. If still unsure, retry the same submission.',
+      description:
+          'Confirm that you reviewed current $_noun history and resolved the earlier submission. If still unsure, retry the same submission.',
       action: 'Confirm history reviewed',
     )) {
       return;
@@ -218,6 +234,45 @@ class _IncomeFormState extends State<_IncomeForm> {
     widget.repository.pending = null;
     context.pop();
   }
+
+  Widget _balancePreview(
+    BigInt balance,
+    IncomeRecord? record,
+  ) => ValueListenableBuilder(
+    valueListenable: _amount,
+    builder: (context, value, _) {
+      final available =
+          balance +
+          (record != null && _wallet == record.walletId
+              ? record.amount
+              : BigInt.zero);
+      final input = value.text;
+      final parts = input.split('.');
+      final amount = validIncomeAmount(input)
+          ? BigInt.parse(
+              parts.first +
+                  (parts.length == 2 ? parts.last.padRight(2, '0') : '00'),
+            )
+          : null;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Available wallet balance: ${walletMoney(balance)}'),
+          if (available != balance)
+            Text('Available for this edit: ${walletMoney(available)}'),
+          if (amount != null && amount > available)
+            const Text(
+              'The selected wallet may have insufficient funds.',
+              style: TextStyle(color: AppColors.error),
+            )
+          else if (amount != null)
+            Text(
+              'Estimated remaining balance: ${walletMoney(available - amount)}',
+            ),
+        ],
+      );
+    },
+  );
 
   @override
   void dispose() {
@@ -254,15 +309,25 @@ class _IncomeFormState extends State<_IncomeForm> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (wallets.isEmpty)
-              const AppErrorMessage(
-                'Create an active wallet before recording income.',
+              AppErrorMessage(
+                'Create an active wallet before recording $_noun.',
               ),
             if (categories.isEmpty)
-              const AppErrorMessage(
-                'Create an active income category before recording income.',
+              AppErrorMessage(
+                'Create an active $_noun category before recording $_noun.',
+              ),
+            if (_expense && wallets.isEmpty && enabled)
+              AppSecondaryButton(
+                'Open wallets',
+                onPressed: () => _openManagement('/home/wallets'),
+              ),
+            if (_expense && categories.isEmpty && enabled)
+              AppSecondaryButton(
+                'Open categories',
+                onPressed: () => _openManagement('/home/categories'),
               ),
             AppTextField(
-              label: 'Income title',
+              label: '$_label title',
               controller: _title,
               enabled: enabled,
               validator: (value) =>
@@ -284,7 +349,7 @@ class _IncomeFormState extends State<_IncomeForm> {
             ),
             const SizedBox(height: AppSpacing.sm),
             incomeDropdown(
-              'Income category',
+              '$_label category',
               categories,
               _category,
               enabled ? (id) => setState(() => _category = id) : null,
@@ -298,9 +363,12 @@ class _IncomeFormState extends State<_IncomeForm> {
               enabled ? (id) => setState(() => _wallet = id) : null,
               requiredValue: true,
             ),
+            if (_expense)
+              if (widget.choices.balances[_wallet] case final balance?)
+                _balancePreview(balance, record),
             const SizedBox(height: AppSpacing.sm),
             AppSecondaryButton(
-              'Income date: ${calendarDate(_date)}',
+              '$_label date: ${calendarDate(_date)}',
               onPressed: enabled
                   ? () async {
                       final date = await showDatePicker(
@@ -325,9 +393,13 @@ class _IncomeFormState extends State<_IncomeForm> {
             const SizedBox(height: AppSpacing.md),
             Text(
               record == null
-                  ? 'Saving credits the selected wallet.'
+                  ? (_expense
+                        ? 'Saving deducts from the selected wallet.'
+                        : 'Saving credits the selected wallet.')
                   : _wallet != record.walletId
-                  ? 'Saving reverses the original credit in ${record.walletName} and credits the selected wallet.'
+                  ? (_expense
+                        ? 'Saving refunds ${record.walletName} and deducts from the selected wallet.'
+                        : 'Saving reverses the original credit in ${record.walletName} and credits the selected wallet.')
                   : 'Changing the amount adjusts this wallet balance.',
             ),
             if (_error case final error?) AppErrorMessage(error),
@@ -337,14 +409,14 @@ class _IncomeFormState extends State<_IncomeForm> {
                 _uncertain
                     ? 'Retry same submission'
                     : record == null
-                    ? 'Save income'
+                    ? 'Save $_noun'
                     : 'Save changes',
                 busy: _busy,
                 onPressed: _save,
               ),
             if (_stale || _uncertain)
               AppSecondaryButton(
-                record == null ? 'Check history' : 'Reload income',
+                record == null ? 'Check history' : 'Reload $_noun',
                 onPressed: _busy ? null : _reconcile,
               )
             else

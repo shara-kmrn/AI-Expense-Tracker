@@ -34,11 +34,15 @@ class ExpenseTrackerApp extends StatefulWidget {
 class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
   late final GoRouter _router;
   late final IncomeRepository _incomes;
+  late final IncomeRepository _expenses;
   String? _incomeOwner;
 
   void _clearIncomeOnAccountChange() {
     final owner = widget.auth.user?.id;
-    if (owner != _incomeOwner) _incomes.pending = null;
+    if (owner != _incomeOwner) {
+      _incomes.pending = null;
+      _expenses.pending = null;
+    }
     _incomeOwner = owner;
   }
 
@@ -49,15 +53,69 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
     final categories = CategoryRepository(auth.repository.client);
     final wallets = WalletRepository(auth.repository.client);
     final incomes = _incomes = IncomeRepository(auth.repository.client);
+    final expenses = _expenses = IncomeRepository(
+      auth.repository.client,
+      expense: true,
+    );
     _incomeOwner = auth.user?.id;
     auth.addListener(_clearIncomeOnAccountChange);
     final incomeChoices = IncomeChoiceLoader(categories, wallets);
+    final expenseChoices = IncomeChoiceLoader(
+      categories,
+      wallets,
+      categoryType: CategoryType.expense,
+    );
     GoRoute form(String path, FormAction action) => GoRoute(
       path: path,
       builder: (_, _) => ListenableBuilder(
         listenable: auth,
         builder: (_, _) => AccountForm(action, auth),
       ),
+    );
+    GoRoute financialRoute(
+      String path,
+      IncomeRepository repository,
+      IncomeChoiceLoader choices,
+    ) => GoRoute(
+      path: path,
+      builder: (_, _) => IncomeHistory(
+        auth,
+        repository,
+        choices,
+        key: ValueKey(auth.user?.id),
+      ),
+      routes: [
+        GoRoute(
+          path: 'add',
+          builder: (_, _) => IncomeEditor(
+            auth,
+            repository,
+            choices,
+            key: ValueKey(auth.user?.id),
+          ),
+        ),
+        GoRoute(
+          path: ':id',
+          builder: (_, state) => IncomeDetails(
+            auth,
+            repository,
+            state.pathParameters['id']!,
+            key: ValueKey((auth.user?.id, state.pathParameters['id'])),
+          ),
+          routes: [
+            GoRoute(
+              path: 'edit',
+              builder: (_, state) => IncomeEditor(
+                auth,
+                repository,
+                choices,
+                id: state.pathParameters['id'],
+                key: ValueKey((auth.user?.id, state.pathParameters['id'])),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
     _router = GoRouter(
       refreshListenable: auth,
@@ -101,50 +159,8 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
                 form('delete', FormAction.delete),
               ],
             ),
-            GoRoute(
-              path: 'income',
-              builder: (_, _) => IncomeHistory(
-                auth,
-                incomes,
-                incomeChoices,
-                key: ValueKey(auth.user?.id),
-              ),
-              routes: [
-                GoRoute(
-                  path: 'add',
-                  builder: (_, _) => IncomeEditor(
-                    auth,
-                    incomes,
-                    incomeChoices,
-                    key: ValueKey(auth.user?.id),
-                  ),
-                ),
-                GoRoute(
-                  path: ':id',
-                  builder: (_, state) => IncomeDetails(
-                    auth,
-                    incomes,
-                    state.pathParameters['id']!,
-                    key: ValueKey((auth.user?.id, state.pathParameters['id'])),
-                  ),
-                  routes: [
-                    GoRoute(
-                      path: 'edit',
-                      builder: (_, state) => IncomeEditor(
-                        auth,
-                        incomes,
-                        incomeChoices,
-                        id: state.pathParameters['id'],
-                        key: ValueKey((
-                          auth.user?.id,
-                          state.pathParameters['id'],
-                        )),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+            financialRoute('income', incomes, incomeChoices),
+            financialRoute('expenses', expenses, expenseChoices),
             GoRoute(
               path: 'wallets',
               builder: (_, _) =>

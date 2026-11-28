@@ -12,8 +12,6 @@ import '../data/income_repository.dart';
 import 'income_controller.dart';
 import 'income_form.dart';
 
-const incomeRoute = '/home/income';
-
 class IncomeHistory extends StatefulWidget {
   const IncomeHistory(this.auth, this.repository, this.choices, {super.key});
   final AuthController auth;
@@ -47,12 +45,63 @@ class _IncomeHistoryState extends State<IncomeHistory> {
   Future<void> _filter() async {
     final result = await showDialog<IncomeFilters>(
       context: context,
-      builder: (_) =>
-          _IncomeFilterDialog(widget.auth, widget.choices, _state.filters),
+      builder: (_) => _IncomeFilterDialog(
+        widget.auth,
+        widget.choices,
+        _state.filters,
+        widget.repository.noun,
+      ),
     );
     if (result != null && mounted) {
       _state.applyFilters(result.category, result.wallet, result.dates);
     }
+  }
+
+  Widget _expensePeriods(BuildContext context, MaterialLocalizations labels) {
+    final start = _state.summary?.start;
+    final end = _state.summary?.end;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Expense summary'),
+        Wrap(
+          spacing: AppSpacing.xs,
+          children: [
+            for (final period in ExpensePeriod.values)
+              ChoiceChip(
+                label: Text(switch (period) {
+                  ExpensePeriod.day => 'Daily',
+                  ExpensePeriod.week => 'Weekly',
+                  ExpensePeriod.month => 'Monthly',
+                }),
+                selected: period == _state.period,
+                onSelected: (_) =>
+                    _state.selectExpensePeriod(_state.month, period),
+              ),
+          ],
+        ),
+        AppSecondaryButton(
+          'Summary date: ${labels.formatMediumDate(_state.month)}',
+          onPressed: () async {
+            final selected = await showDatePicker(
+              context: context,
+              initialDate: _state.month,
+              firstDate: DateTime(1),
+              lastDate: colomboToday(),
+            );
+            if (selected != null && mounted) {
+              _state.selectExpensePeriod(selected, _state.period);
+            }
+          },
+        ),
+        if (start != null && end != null)
+          Text(
+            start == end
+                ? labels.formatMediumDate(start)
+                : '${labels.formatMediumDate(start)} to ${labels.formatMediumDate(end)}',
+          ),
+      ],
+    );
   }
 
   @override
@@ -61,10 +110,14 @@ class _IncomeHistoryState extends State<IncomeHistory> {
     builder: (context, _) {
       final labels = MaterialLocalizations.of(context);
       final month = _state.month;
+      final expense = widget.repository.expense;
+      final noun = widget.repository.noun;
+      final route = widget.repository.route;
+      final color = expense ? AppColors.error : AppColors.success;
       final today = colomboToday();
       final nextMonth = DateTime(month.year, month.month + 1);
       return AuthScreenLayout(
-        title: 'Income',
+        title: expense ? 'Expenses' : 'Income',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -74,47 +127,56 @@ class _IncomeHistoryState extends State<IncomeHistory> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text('Monthly income'),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        IconButton(
-                          tooltip: 'Previous month',
-                          icon: const Icon(Icons.chevron_left),
-                          onPressed: month.year == 1 && month.month == 1
-                              ? null
-                              : () => _state.selectMonth(
-                                  DateTime(month.year, month.month - 1),
-                                ),
-                        ),
-                        Flexible(
-                          child: Text(
-                            labels.formatMonthYear(month),
-                            textAlign: TextAlign.center,
+                    if (expense)
+                      _expensePeriods(context, labels)
+                    else ...[
+                      const Text('Monthly income'),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          IconButton(
+                            tooltip: 'Previous month',
+                            icon: const Icon(Icons.chevron_left),
+                            onPressed: month.year == 1 && month.month == 1
+                                ? null
+                                : () => _state.selectMonth(
+                                    DateTime(month.year, month.month - 1),
+                                  ),
                           ),
-                        ),
-                        IconButton(
-                          tooltip: 'Next month',
-                          icon: const Icon(Icons.chevron_right),
-                          onPressed: nextMonth.isAfter(today)
-                              ? null
-                              : () => _state.selectMonth(nextMonth),
-                        ),
-                      ],
-                    ),
+                          Flexible(
+                            child: Text(
+                              labels.formatMonthYear(month),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Next month',
+                            icon: const Icon(Icons.chevron_right),
+                            onPressed: nextMonth.isAfter(today)
+                                ? null
+                                : () => _state.selectMonth(nextMonth),
+                          ),
+                        ],
+                      ),
+                    ],
                     if (_state.summary case final summary?) ...[
                       Text(
                         walletMoney(summary.total),
                         style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(color: AppColors.success),
+                            ?.copyWith(color: color),
                       ),
-                      Text('${summary.count} income records'),
+                      Text('${summary.count} $noun records'),
                       for (final category in summary.categories)
                         ListTile(
                           dense: true,
                           contentPadding: EdgeInsets.zero,
                           title: Text(category.name),
                           subtitle: Text(walletMoney(category.amount)),
+                          trailing: expense && summary.total != BigInt.zero
+                              ? Text(
+                                  '${category.amount * BigInt.from(100) ~/ summary.total}%',
+                                )
+                              : null,
                         ),
                     ],
                     if (_state.loadingSummary)
@@ -131,10 +193,7 @@ class _IncomeHistoryState extends State<IncomeHistory> {
               ),
             ),
             const SizedBox(height: AppSpacing.sm),
-            AppPrimaryButton(
-              'Add income',
-              onPressed: () => _open('$incomeRoute/add'),
-            ),
+            AppPrimaryButton('Add $noun', onPressed: () => _open('$route/add')),
             TextField(
               onChanged: _state.search,
               maxLength: 120,
@@ -154,7 +213,7 @@ class _IncomeHistoryState extends State<IncomeHistory> {
               ),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              'Income history',
+              '${widget.repository.label} history',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             if (_state.historyError case final error?) ...[
@@ -167,9 +226,9 @@ class _IncomeHistoryState extends State<IncomeHistory> {
             if (!_state.loading &&
                 _state.items.isEmpty &&
                 _state.historyError == null)
-              const Padding(
-                padding: EdgeInsets.all(AppSpacing.md),
-                child: Text('No income records match.'),
+              Padding(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                child: Text('No $noun records match.'),
               ),
             for (final record in _state.items)
               Card(
@@ -185,12 +244,12 @@ class _IncomeHistoryState extends State<IncomeHistory> {
                       Text('${record.categoryName} · ${record.walletName}'),
                       Text(labels.formatMediumDate(record.date)),
                       Text(
-                        '+ ${walletMoney(record.amount)}',
-                        style: const TextStyle(color: AppColors.success),
+                        '${expense ? '-' : '+'} ${walletMoney(record.amount)}',
+                        style: TextStyle(color: color),
                       ),
                     ],
                   ),
-                  onTap: () => _open('$incomeRoute/${record.id}'),
+                  onTap: () => _open('$route/${record.id}'),
                 ),
               ),
             if (_state.next != null &&
@@ -206,10 +265,11 @@ class _IncomeHistoryState extends State<IncomeHistory> {
 }
 
 class _IncomeFilterDialog extends StatefulWidget {
-  const _IncomeFilterDialog(this.auth, this.choices, this.initial);
+  const _IncomeFilterDialog(this.auth, this.choices, this.initial, this.noun);
   final AuthController auth;
   final IncomeChoiceLoader choices;
   final IncomeFilters initial;
+  final String noun;
 
   @override
   State<_IncomeFilterDialog> createState() => _IncomeFilterDialogState();
@@ -223,7 +283,7 @@ class _IncomeFilterDialogState extends State<_IncomeFilterDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Filter income history'),
+    title: Text('Filter ${widget.noun} history'),
     scrollable: true,
     content: FutureBuilder(
       future: options,
@@ -314,6 +374,9 @@ class _IncomeDetailsState extends State<IncomeDetails> {
   late Future<IncomeRecord> _record = _load();
   bool _busy = false;
   String? _error;
+  String get noun => widget.repository.noun;
+  String get route => widget.repository.route;
+  bool get expense => widget.repository.expense;
 
   Future<IncomeRecord> _load() => widget.auth.authenticatedRead(
     (access) => widget.repository.get(access, widget.id),
@@ -336,10 +399,11 @@ class _IncomeDetailsState extends State<IncomeDetails> {
     try {
       if (!await confirmAction(
         context,
-        title: 'Delete this income?',
-        description:
-            '${walletMoney(record.amount)} will be deducted from ${record.walletName}.',
-        action: 'Delete income',
+        title: 'Delete this $noun?',
+        description: expense
+            ? '${walletMoney(record.amount)} will be credited back to ${record.walletName}.'
+            : '${walletMoney(record.amount)} will be deducted from ${record.walletName}.',
+        action: 'Delete $noun',
         destructive: true,
       )) {
         return;
@@ -349,8 +413,9 @@ class _IncomeDetailsState extends State<IncomeDetails> {
         (access) => widget.repository.delete(access, record),
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Income deleted.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${widget.repository.label} deleted.')),
+      );
       context.pop();
     } catch (error) {
       if (!mounted) return;
@@ -376,7 +441,7 @@ class _IncomeDetailsState extends State<IncomeDetails> {
 
   @override
   Widget build(BuildContext context) => AuthScreenLayout(
-    title: 'Income details',
+    title: '${widget.repository.label} details',
     child: FutureBuilder(
       future: _record,
       builder: (context, snapshot) {
@@ -400,8 +465,10 @@ class _IncomeDetailsState extends State<IncomeDetails> {
                 ),
                 title: Text(record.title),
                 subtitle: Text(
-                  '+ ${walletMoney(record.amount)}',
-                  style: const TextStyle(color: AppColors.success),
+                  '${expense ? '-' : '+'} ${walletMoney(record.amount)}',
+                  style: TextStyle(
+                    color: expense ? AppColors.error : AppColors.success,
+                  ),
                 ),
               ),
               ListTile(
@@ -417,7 +484,7 @@ class _IncomeDetailsState extends State<IncomeDetails> {
                 ),
               ),
               ListTile(
-                title: const Text('Received'),
+                title: Text(expense ? 'Spent' : 'Received'),
                 subtitle: Text(labels.formatFullDate(record.date)),
               ),
               if (record.note case final note?)
@@ -431,16 +498,16 @@ class _IncomeDetailsState extends State<IncomeDetails> {
                 subtitle: Text(record.updated.toUtc().toIso8601String()),
               ),
               AppPrimaryButton(
-                'Edit income',
+                'Edit $noun',
                 onPressed: _busy
                     ? null
                     : () async {
-                        await context.push('$incomeRoute/${record.id}/edit');
+                        await context.push('$route/${record.id}/edit');
                         if (mounted) _refresh();
                       },
               ),
               AppSecondaryButton(
-                'Delete income',
+                'Delete $noun',
                 onPressed: _busy ? null : () => _delete(record),
               ),
             ],

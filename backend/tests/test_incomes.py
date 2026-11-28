@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.auth.models import User
 from app.incomes.models import Income, IncomeCreation
-from app.incomes import service
+from app.financial import service
 from app.wallets.models import Wallet
 from test_authentication import assert_unauthorized, context
 from test_wallets import authenticate, create as create_wallet

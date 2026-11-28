@@ -32,7 +32,13 @@ enum Endpoint {
   income('GET', 'incomes/{id}', 200),
   createIncome('POST', 'incomes', 201),
   updateIncome('PATCH', 'incomes/{id}', 200),
-  deleteIncome('DELETE', 'incomes/{id}', 204);
+  deleteIncome('DELETE', 'incomes/{id}', 204),
+  expenses('GET', 'expenses', 200),
+  expenseSummary('GET', 'expenses/summary', 200),
+  expense('GET', 'expenses/{id}', 200),
+  createExpense('POST', 'expenses', 201),
+  updateExpense('PATCH', 'expenses/{id}', 200),
+  deleteExpense('DELETE', 'expenses/{id}', 204);
 
   const Endpoint(this.method, this.path, this.status);
   final String method;
@@ -92,14 +98,17 @@ class ApiClient {
     final needsId = endpoint.path.contains('{id}');
     final isWallet = endpoint.path.startsWith('wallets/');
     final isIncome = endpoint.path.startsWith('incomes/');
-    final id = isIncome
+    final isExpense = endpoint.path.startsWith('expenses/');
+    final id = isIncome || isExpense
         ? incomeId
         : isWallet
         ? walletId
         : categoryId;
     if (needsId && (id == null || !_uuid.hasMatch(id))) {
       throw ApiFailure(
-        isIncome
+        isExpense
+            ? 'Expense not found.'
+            : isIncome
             ? 'Income not found.'
             : isWallet
             ? 'Wallet not found.'
@@ -118,10 +127,14 @@ class ApiClient {
     )..followRedirects = false;
     request.headers['Accept'] = 'application/json';
     if (bearer != null) request.headers['Authorization'] = 'Bearer $bearer';
-    if (endpoint == Endpoint.createIncome && idempotencyKey != null) {
+    if ((endpoint == Endpoint.createIncome ||
+            endpoint == Endpoint.createExpense) &&
+        idempotencyKey != null) {
       request.headers['Idempotency-Key'] = idempotencyKey;
     }
-    if (endpoint == Endpoint.deleteIncome && expectedVersion != null) {
+    if ((endpoint == Endpoint.deleteIncome ||
+            endpoint == Endpoint.deleteExpense) &&
+        expectedVersion != null) {
       request.headers['If-Match'] = '$expectedVersion';
     }
     if (body != null) {
@@ -210,6 +223,12 @@ class ApiClient {
         'A wallet must have a zero balance before archiving.',
       404 when endpoint.path.startsWith('incomes') =>
         'The income or selected wallet or category is unavailable.',
+      404 when endpoint.path.startsWith('expenses') =>
+        'The expense or selected wallet or category is unavailable.',
+      409 when endpoint.path.startsWith('expenses') => _incomeConflict(
+        response,
+        expense: true,
+      ),
       409 when endpoint.path.startsWith('incomes') => _incomeConflict(response),
       429 => 'Too many requests. Wait a moment and try again.',
       _ => 'The service could not complete your request.',
@@ -217,8 +236,13 @@ class ApiClient {
     return ApiFailure(message, status: code, uncertain: code >= 500);
   }
 
-  String _incomeConflict(http.Response response) {
-    const known = {
+  String _incomeConflict(http.Response response, {bool expense = false}) {
+    final known = {
+      'Expense changed. Reload it before continuing.':
+          'Expense changed. Reload it before continuing.',
+      'Insufficient wallet balance':
+          'The wallet has insufficient funds for this expense.',
+      'Select an active expense category': 'Select an active expense category.',
       'Income changed. Reload it before continuing.':
           'Income changed. Reload it before continuing.',
       'Wallet balance is too low to reverse this income':
@@ -229,7 +253,8 @@ class ApiClient {
           'Restore the wallet before changing its balance.',
       'Select an active wallet': 'Select an active wallet.',
       'Select an active income category': 'Select an active income category.',
-      'This operation key already belongs to a different request': 'This operation key belongs to a different request. Check your income history.',
+      'This operation key already belongs to a different request':
+          'This operation key belongs to a different request. Check your ${expense ? 'expense' : 'income'} history.',
     };
     try {
       final data = jsonDecode(utf8.decode(response.bodyBytes));
@@ -240,6 +265,6 @@ class ApiClient {
     } on FormatException {
       // Only known, sanitized messages are displayed.
     }
-    return 'Income conflicts with current data. Reload and check your selection.';
+    return '${expense ? 'Expense' : 'Income'} conflicts with current data. Reload and check your selection.';
   }
 }
