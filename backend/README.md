@@ -100,17 +100,15 @@ Set-ExpenseTrackerDatabaseUrl TEST_DATABASE_URL expense_tracker_test_app expense
 
 ## Alembic migrations
 
-Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, `0003` adds password reset records, `0004` adds and backfills categories, and `0005` adds wallets. Online migrations verify the database and role. Downgrading from `0005` to `0004` drops all wallet data while preserving accounts, sessions, recovery records, and categories. Run the round trip only against the isolated test database. Apply only the forward upgrade to the development database after testing.
+Run these commands from `backend/`. Revision `0001` is the empty baseline, `0002` adds users and refresh sessions, `0003` adds password reset records, `0004` adds and backfills categories, `0005` adds wallets, and `0006` adds income. Online migrations verify the database and role. The income migration tests exercise the rollback in an isolated transaction. Apply only the forward upgrade to the development database after testing.
 
 ```powershell
-.\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
-.\.venv\Scripts\python.exe -m alembic -x target=test downgrade 0004
 .\.venv\Scripts\python.exe -m alembic -x target=test upgrade head
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m alembic -x target=test current
 .\.venv\Scripts\python.exe -m alembic current
-.\.venv\Scripts\python.exe -m alembic upgrade 0005
+.\.venv\Scripts\python.exe -m alembic upgrade 0006
 .\.venv\Scripts\python.exe -m alembic current
 ```
 
@@ -157,7 +155,42 @@ The tests still run, and Uvicorn does not use this test client.
 
 The real PostgreSQL tests skip when `TEST_DATABASE_URL` is unset. They verify the connected test database and role before running a migration round trip inside a transaction that is rolled back. Configure both project databases on the same instance for the isolation checks.
 
-The authentication, category, and wallet integration suites require `TEST_DATABASE_URL` and revision `0005` on the isolated test database. They verify database and role identity, create uniquely named synthetic accounts, and remove those accounts when finished. SMTP is mocked in tests.
+The authentication, category, wallet, and income integration suites require `TEST_DATABASE_URL` and revision `0006` on the isolated test database. They verify database and role identity, create uniquely named synthetic accounts, and remove those accounts when finished. SMTP is mocked in tests.
+
+Connection failures report a sanitized PostgreSQL diagnostic. The application engine suppresses informational SQL and pool logging and hides bound parameters. The pytest configuration keeps tracebacks while suppressing frame locals, which can contain driver configuration. For a connection failure, verify the isolated database identity, listener, and role with an interactive `psql` session.
+
+## Income management
+
+The income module stores owner-scoped received income in `incomes`. Each record references a wallet and an income category. Composite foreign keys enforce same-owner references. IDs remain stable, edits increment a version, and deletion records a UTC timestamp while excluding the record from history and totals. Account deletion cascades to income records and creation replay results. The development deletion policy still needs a production financial retention decision.
+
+`income_date` is a calendar DATE in YYYY-MM-DD format. The business date uses the modern Asia/Colombo offset of UTC+05:30. Historical dates are accepted through today. Technical timestamps are UTC. Positive LKR amounts are sent as exact decimal strings with up to two fractional digits and a maximum of `9999999999999999.99`. PostgreSQL stores amounts as NUMERIC(18,2), and Python uses Decimal. PostgreSQL sums without the individual amount's precision limit. The wallet cannot go below zero or above its limit.
+
+| Method and path | Contract |
+| --- | --- |
+| `GET /api/v1/incomes` | Owner-scoped active history ordered by received date, creation time, and ID descending. Supports `date_from`, `date_to`, `category_id`, `wallet_id`, literal title or note search `q`, `limit` (1–100, default 50), and `offset`. Returns `items` and nullable `next_offset`. |
+| `GET /api/v1/incomes/summary` | Requires `year` and `month`. Returns monthly `total`, `count`, and category totals in `categories`. History filters and pagination do not affect the summary. Archived references remain included. |
+| `GET /api/v1/incomes/{id}` | Returns the record, version, and wallet and category display fields. Missing, foreign, and deleted records return `404`. |
+| `POST /api/v1/incomes` | Requires a UUIDv4 `Idempotency-Key`. Returns `201` on first success and replays the original `201` snapshot for the same canonical request. |
+| `PATCH /api/v1/incomes/{id}` | Requires `expected_version` and one or more editable fields. Returns the new version. |
+| `DELETE /api/v1/incomes/{id}` | Requires an integer version in `If-Match`. Returns `204` and reverses the credit once. Subsequent deletes with a valid header also return `204`. |
+
+Example create body.
+
+```json
+{"title":"Monthly salary","amount":"50000.00","currency":"LKR","category_id":"10000000-0000-4000-8000-000000000001","wallet_id":"10000000-0000-4000-8000-000000000002","income_date":"2026-11-28","note":"November salary"}
+```
+
+Example summary response for the month.
+
+```json
+{"currency":"LKR","year":2026,"month":11,"total":"50000.00","count":1,"categories":[{"category_id":"10000000-0000-4000-8000-000000000001","name":"Salary","total":"50000.00"}]}
+```
+
+All requests require a valid bearer session. Wrong-owner references return `404`, invalid input returns `422`, and stale versions, incompatible references, balance violations, and operation-key conflicts return `409`. Titles accept up to 120 code points, and notes accept up to 1,000. New assignments require active references and an INCOME category. An unchanged archived reference remains usable for metadata corrections. Balance-changing operations must preserve the archived wallet's zero-balance rule.
+
+The write transaction takes the owner key-share lock first, then the creation key or income row, wallet rows in UUID order, and the category share lock when applicable. Account deletion locks the owner before cascading. Wallet and category archival lock their own rows. Financial writes commit once. Creation reserves the owner-scoped key and persists the canonical fingerprint and original response in the same transaction as the credit. Successful keys are retained until account deletion. Edits apply the amount delta or reverse the source credit and apply the destination credit. Deletion reverses the credit and records the tombstone atomically.
+
+Revision `0006` creates income and replay storage without changing existing wallet balances. Its downgrade takes exclusive locks and refuses when either table contains data. For isolated verification, upgrade to `0006`, run the migration tests that downgrade to `0005` and re-upgrade within a rolled-back test transaction, then run the complete suite. Apply only the forward migration to development. Reconcile Phase 5.3 balances with opening balance plus exact SUM of active income by owner and wallet. Future expense and transfer writers must share the lock order, use auditable atomic balance changes, and extend reconciliation.
 
 ## Wallet management
 

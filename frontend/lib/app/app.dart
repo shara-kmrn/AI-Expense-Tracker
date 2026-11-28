@@ -9,6 +9,10 @@ import '../features/categories/data/category_repository.dart';
 import '../features/categories/presentation/categories_page.dart';
 import '../features/categories/presentation/category_form.dart';
 import '../features/profile/presentation/account_pages.dart';
+import '../features/incomes/data/income_repository.dart';
+import '../features/incomes/data/income_choices.dart';
+import '../features/incomes/presentation/income_form.dart';
+import '../features/incomes/presentation/income_pages.dart';
 import '../features/wallets/data/wallet_repository.dart';
 import '../features/wallets/presentation/wallet_form.dart';
 import '../features/wallets/presentation/wallet_pages.dart';
@@ -29,6 +33,14 @@ class ExpenseTrackerApp extends StatefulWidget {
 
 class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
   late final GoRouter _router;
+  late final IncomeRepository _incomes;
+  String? _incomeOwner;
+
+  void _clearIncomeOnAccountChange() {
+    final owner = widget.auth.user?.id;
+    if (owner != _incomeOwner) _incomes.pending = null;
+    _incomeOwner = owner;
+  }
 
   @override
   void initState() {
@@ -36,6 +48,10 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
     final auth = widget.auth;
     final categories = CategoryRepository(auth.repository.client);
     final wallets = WalletRepository(auth.repository.client);
+    final incomes = _incomes = IncomeRepository(auth.repository.client);
+    _incomeOwner = auth.user?.id;
+    auth.addListener(_clearIncomeOnAccountChange);
+    final incomeChoices = IncomeChoiceLoader(categories, wallets);
     GoRoute form(String path, FormAction action) => GoRoute(
       path: path,
       builder: (_, _) => ListenableBuilder(
@@ -83,6 +99,50 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
               routes: [
                 form('password', FormAction.change),
                 form('delete', FormAction.delete),
+              ],
+            ),
+            GoRoute(
+              path: 'income',
+              builder: (_, _) => IncomeHistory(
+                auth,
+                incomes,
+                incomeChoices,
+                key: ValueKey(auth.user?.id),
+              ),
+              routes: [
+                GoRoute(
+                  path: 'add',
+                  builder: (_, _) => IncomeEditor(
+                    auth,
+                    incomes,
+                    incomeChoices,
+                    key: ValueKey(auth.user?.id),
+                  ),
+                ),
+                GoRoute(
+                  path: ':id',
+                  builder: (_, state) => IncomeDetails(
+                    auth,
+                    incomes,
+                    state.pathParameters['id']!,
+                    key: ValueKey((auth.user?.id, state.pathParameters['id'])),
+                  ),
+                  routes: [
+                    GoRoute(
+                      path: 'edit',
+                      builder: (_, state) => IncomeEditor(
+                        auth,
+                        incomes,
+                        incomeChoices,
+                        id: state.pathParameters['id'],
+                        key: ValueKey((
+                          auth.user?.id,
+                          state.pathParameters['id'],
+                        )),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
             GoRoute(
@@ -162,6 +222,7 @@ class _ExpenseTrackerAppState extends State<ExpenseTrackerApp> {
 
   @override
   void dispose() {
+    widget.auth.removeListener(_clearIncomeOnAccountChange);
     _router.dispose();
     super.dispose();
   }

@@ -12,6 +12,7 @@ from app.db.base import Base
 class Wallet(Base):
     __tablename__ = "wallets"
     __table_args__ = (
+        UniqueConstraint("user_id", "id", name="uq_wallets_owner_id"),
         UniqueConstraint("user_id", "normalized_name", name="uq_wallets_owner_name"),
         CheckConstraint("type IN ('CASH', 'BANK', 'DIGITAL')", name="ck_wallets_type"),
         CheckConstraint("currency = 'LKR'", name="ck_wallets_currency"),

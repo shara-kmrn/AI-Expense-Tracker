@@ -1,12 +1,15 @@
+import logging
+import traceback
 from unittest.mock import MagicMock
 
 import pytest
+import psycopg
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 from sqlalchemy.exc import OperationalError
 
 from app.core.config import Settings
-from app.db.session import build_engine, session_scope
+from app.db.session import DatabaseNotConfigured, build_engine, session_scope
 from app.main import create_app
 
 
@@ -78,6 +81,40 @@ def test_readiness_success_releases_session(app):
     assert str(session.execute.call_args.args[0]) == "SELECT 1"
     factory.return_value.__exit__.assert_called_once_with(None, None, None)
     session.commit.assert_not_called()
+
+
+def test_driver_connection_trace_and_logs_redact_password(monkeypatch, caplog):
+    marker = "synthetic-connection-secret"
+    url = f"postgresql+psycopg://app:{marker}@localhost/example"
+    engine = build_engine(Settings(_env_file=None, DATABASE_URL=url).database_url)
+
+    def fail_connection(*args, **kwargs):
+        assert kwargs["password"] == marker
+        raise psycopg.errors.ConnectionTimeout(f"Raw driver connection details: {url}")
+
+    monkeypatch.setattr(engine.dialect, "connect", fail_connection)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="sqlalchemy"):
+            with pytest.raises(OperationalError) as error:
+                engine.connect()
+        diagnostic = "".join(traceback.format_exception(error.value))
+        assert "PostgreSQL connection timed out." in diagnostic
+        assert "Raw driver connection details" not in diagnostic
+        assert "fail_connection" not in diagnostic
+        assert marker not in diagnostic
+        assert marker not in caplog.text
+        assert error.value.__cause__ is None
+        assert error.value.__context__ is None
+    finally:
+        engine.dispose()
+
+
+def test_invalid_engine_configuration_does_not_chain_raw_url():
+    marker = "synthetic-malformed-connection-secret"
+    with pytest.raises(DatabaseNotConfigured, match="Invalid PostgreSQL connection configuration") as error:
+        build_engine(SecretStr(marker))
+    assert marker not in "".join(traceback.format_exception(error.value))
+    assert error.value.__context__ is None
 
 
 def test_readiness_database_error_is_sanitized(app, caplog):

@@ -11,6 +11,7 @@ from app.db.base import Base
 class Category(Base):
     __tablename__ = "categories"
     __table_args__ = (
+        UniqueConstraint("user_id", "id", name="uq_categories_owner_id"),
         UniqueConstraint("user_id", "type", "normalized_name", name="uq_categories_owner_type_name"),
         UniqueConstraint("user_id", "default_code", name="uq_categories_owner_default"),
         CheckConstraint("type IN ('INCOME', 'EXPENSE')", name="ck_categories_type"),
